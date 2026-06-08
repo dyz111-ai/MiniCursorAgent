@@ -1,0 +1,4 @@
+换缓存目录
+$env:NUGET_PACKAGES="E:\NuGetPackages"
+
+dotnet nuget locals global-packages --list
