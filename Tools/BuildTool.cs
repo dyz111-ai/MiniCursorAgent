@@ -10,7 +10,7 @@ public sealed class BuildTool : IAgentTool
 {
     public string Name => "BuildTool";
 
-    public string Description => "尝试在当前文件所在目录或其父目录中寻找 .csproj，然后执行 dotnet build。输入：{\"path\":\"可选，文件/目录/csproj 路径\"}";
+    public string Description => "当当前文件位于 .NET 项目时，向上寻找 .csproj 并执行 dotnet build。输入：{\"path\":\"可选，文件/目录/csproj 路径\"}";
 
     public async Task<string> ExecuteAsync(JsonElement input, AgentMemory memory, CancellationToken cancellationToken = default)
     {
@@ -28,7 +28,7 @@ public sealed class BuildTool : IAgentTool
         var projectPath = ResolveProjectPath(path);
         if (projectPath is null)
         {
-            return $"BuildTool 未执行：从路径 {path} 向上未找到 .csproj 文件。单文件可以继续审查，但无法执行 dotnet build。";
+            return $"BuildTool 未执行：从路径 {path} 向上未找到 .csproj 文件。非 .NET 项目或单文件场景可继续审查/修改，但无法执行 dotnet build。";
         }
 
         var output = new StringBuilder();

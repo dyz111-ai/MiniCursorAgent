@@ -1,4 +1,5 @@
 using MiniCursorAgent.Models;
+using System.IO;
 
 namespace MiniCursorAgent.Memory;
 
@@ -31,6 +32,7 @@ public sealed class AgentMemory
     {
         return $"""
 当前文件路径：{CurrentFilePath ?? "未打开"}
+当前文件类型：{GetFileTypeLabel()}
 是否允许写入文件：{AllowFileWrite}
 最近一次代码审查结果：{TrimForPrompt(LastReviewResult, 1200)}
 最近一次代码指标结果：{TrimForPrompt(LastMetricsResult, 800)}
@@ -47,5 +49,16 @@ public sealed class AgentMemory
         }
 
         return text.Length <= maxLength ? text : text[..maxLength] + "...（已截断）";
+    }
+
+    private string GetFileTypeLabel()
+    {
+        if (string.IsNullOrWhiteSpace(CurrentFilePath))
+        {
+            return "未知";
+        }
+
+        var extension = Path.GetExtension(CurrentFilePath);
+        return string.IsNullOrWhiteSpace(extension) ? "未知" : extension;
     }
 }

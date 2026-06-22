@@ -1,3 +1,4 @@
+using ICSharpCode.AvalonEdit.Highlighting;
 using Microsoft.Win32;
 using MiniCursorAgent.Agents;
 using MiniCursorAgent.LLM;
@@ -8,8 +9,10 @@ using MiniCursorAgent.Tools;
 using System.IO;
 using System.Text;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Media;
+using System.Windows.Threading;
 
 namespace MiniCursorAgent;
 
@@ -17,12 +20,15 @@ public partial class MainWindow : Window
 {
     private readonly AgentMemory _memory = new();
     private readonly ReActAgent _agent;
+    private readonly EditorDiffHighlighter _diffHighlighter;
     private string? _currentFilePath;
+    private string? _diffActualContent;
     private bool _isRunning;
 
     public MainWindow()
     {
         InitializeComponent();
+        _diffHighlighter = new EditorDiffHighlighter(CodeEditor);
 
         var settings = AppSettings.Load();
         var client = new DeepSeekClient(settings);
@@ -39,7 +45,7 @@ public partial class MainWindow : Window
         _agent = new ReActAgent(client, tools, _memory, settings.AgentMaxSteps, AppendAgentLog);
 
         AppendAgentLog("Mini Cursor Agent 已启动。\n", AgentLogType.System);
-        AppendAgentLog("使用前请先打开一个 .cs 文件，然后在右侧输入任务。\n", AgentLogType.System);
+        AppendAgentLog("使用前请先打开一个代码/文本文件，然后在右侧输入任务。\n", AgentLogType.System);
 
         if (string.IsNullOrWhiteSpace(settings.DeepSeekApiKey))
         {
@@ -51,8 +57,8 @@ public partial class MainWindow : Window
     {
         var dialog = new OpenFileDialog
         {
-            Title = "选择一个 C# 文件",
-            Filter = "C# 文件 (*.cs)|*.cs|所有文件 (*.*)|*.*",
+            Title = "选择一个代码或文本文件",
+            Filter = CodeFileHelper.OpenFileDialogFilter,
             CheckFileExists = true
         };
 
@@ -69,8 +75,10 @@ public partial class MainWindow : Window
         try
         {
             var code = await File.ReadAllTextAsync(filePath, Encoding.UTF8);
+            ClearDiffPreview();
             _currentFilePath = filePath;
             CodeEditor.Text = code;
+            ApplySyntaxHighlighting(filePath);
             CurrentFileTextBlock.Text = filePath;
             SaveButton.IsEnabled = true;
             ReloadButton.IsEnabled = true;
@@ -101,9 +109,20 @@ public partial class MainWindow : Window
 
         try
         {
-            await File.WriteAllTextAsync(_currentFilePath, CodeEditor.Text, Encoding.UTF8);
+            var content = _diffHighlighter.IsActive && _diffActualContent is not null
+                ? _diffActualContent
+                : CodeEditor.Text;
+
+            await File.WriteAllTextAsync(_currentFilePath, content, Encoding.UTF8);
             _memory.CurrentFilePath = _currentFilePath;
-            _memory.CurrentCode = CodeEditor.Text;
+            _memory.CurrentCode = content;
+
+            if (_diffHighlighter.IsActive)
+            {
+                ClearDiffPreview();
+                CodeEditor.Text = content;
+            }
+
             AppendAgentLog($"💾 已保存文件：{_currentFilePath}\n", AgentLogType.System);
         }
         catch (Exception ex)
@@ -136,9 +155,11 @@ public partial class MainWindow : Window
 
         if (string.IsNullOrWhiteSpace(_currentFilePath))
         {
-            MessageBox.Show("请先打开一个 C# 文件。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            MessageBox.Show("请先打开一个文件。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
+
+        UserInputTextBox.Clear();
 
         _isRunning = true;
         SendButton.IsEnabled = false;
@@ -151,6 +172,7 @@ public partial class MainWindow : Window
             _memory.CurrentFilePath = _currentFilePath;
             _memory.CurrentCode = CodeEditor.Text;
             _memory.AllowFileWrite = AutoWriteCheckBox.IsChecked == true;
+            var beforeText = CodeEditor.Text;
 
             AppendAgentLog("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", AgentLogType.Divider);
             AppendAgentLog($"👤 User: {userGoal}\n", AgentLogType.User);
@@ -159,16 +181,15 @@ public partial class MainWindow : Window
             var finalAnswer = await _agent.RunAsync(userGoal);
             AppendAgentLog("\n", AgentLogType.Info);
             AppendAgentLog("✅ Final Answer:\n", AgentLogType.FinalAnswer);
-            AppendAgentLog(finalAnswer + "\n", AgentLogType.FinalAnswer);
+            AppendFormattedFinalAnswer(finalAnswer);
 
             if (!string.IsNullOrWhiteSpace(_memory.LastWritePath) &&
                 string.Equals(_memory.LastWritePath, _currentFilePath, StringComparison.OrdinalIgnoreCase) &&
                 File.Exists(_currentFilePath))
             {
                 var updated = await File.ReadAllTextAsync(_currentFilePath, Encoding.UTF8);
-                CodeEditor.Text = updated;
-                _memory.CurrentCode = updated;
-                AppendAgentLog("🔄 编辑器内容已根据 Agent 写入结果刷新。\n", AgentLogType.System);
+                ShowDiffPreview(beforeText, updated);
+                AppendAgentLog("🔄 编辑器已进入 Diff 预览（绿色=新增，红色=删除）。\n", AgentLogType.System);
             }
         }
         catch (Exception ex)
@@ -184,6 +205,52 @@ public partial class MainWindow : Window
             SaveButton.IsEnabled = !string.IsNullOrWhiteSpace(_currentFilePath);
             ReloadButton.IsEnabled = !string.IsNullOrWhiteSpace(_currentFilePath);
         }
+    }
+
+    private void ApplySyntaxHighlighting(string filePath)
+    {
+        var extension = Path.GetExtension(filePath);
+        CodeEditor.SyntaxHighlighting = string.IsNullOrWhiteSpace(extension)
+            ? null
+            : HighlightingManager.Instance.GetDefinitionByExtension(extension);
+    }
+
+    private void ShowDiffPreview(string oldText, string newText)
+    {
+        var displayLines = CodeDiffService.BuildDisplayLines(oldText, newText);
+        if (!CodeDiffService.HasChanges(displayLines))
+        {
+            _diffActualContent = newText;
+            CodeEditor.Text = newText;
+            _memory.CurrentCode = newText;
+            ClearDiffPreview();
+            return;
+        }
+
+        _diffActualContent = newText;
+        _memory.CurrentCode = newText;
+
+        CodeEditor.Text = string.Join(Environment.NewLine, displayLines.Select(line => line.Text));
+        _diffHighlighter.Apply(displayLines.Select(line => line.Kind).ToList());
+        DiffBanner.Visibility = Visibility.Visible;
+    }
+
+    private void ClearDiffPreview()
+    {
+        _diffActualContent = null;
+        _diffHighlighter.Clear();
+        DiffBanner.Visibility = Visibility.Collapsed;
+    }
+
+    private void ExitDiffButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_diffActualContent is not null)
+        {
+            CodeEditor.Text = _diffActualContent;
+            _memory.CurrentCode = _diffActualContent;
+        }
+
+        ClearDiffPreview();
     }
 
     private void ClearLogButton_Click(object sender, RoutedEventArgs e)
@@ -207,10 +274,52 @@ public partial class MainWindow : Window
             paragraph.Inlines.Add(run);
 
             AgentLogTextBox.Document.Blocks.Add(paragraph);
-            AgentLogTextBox.CaretPosition = paragraph.ContentEnd;
+            Dispatcher.BeginInvoke(ScrollAgentLogToEnd, DispatcherPriority.Loaded);
         });
 
         _ = AppLogger.WriteAsync(message);
+    }
+
+    private void AppendFormattedFinalAnswer(string content)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            var foreground = new SolidColorBrush(Color.FromRgb(0x1A, 0x1A, 0x1A));
+
+            foreach (var block in MarkdownLogRenderer.CreateBlocks(content, foreground))
+            {
+                AgentLogTextBox.Document.Blocks.Add(block);
+            }
+
+            Dispatcher.BeginInvoke(ScrollAgentLogToEnd, DispatcherPriority.Loaded);
+        });
+
+        _ = AppLogger.WriteAsync(content + "\n");
+    }
+
+    private void ScrollAgentLogToEnd()
+    {
+        AgentLogTextBox.CaretPosition = AgentLogTextBox.Document.ContentEnd;
+        FindScrollViewer(AgentLogTextBox)?.ScrollToEnd();
+    }
+
+    private static ScrollViewer? FindScrollViewer(DependencyObject element)
+    {
+        if (element is ScrollViewer scrollViewer)
+        {
+            return scrollViewer;
+        }
+
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(element); i++)
+        {
+            var result = FindScrollViewer(VisualTreeHelper.GetChild(element, i));
+            if (result is not null)
+            {
+                return result;
+            }
+        }
+
+        return null;
     }
 
     private static (Brush Foreground, FontWeight Weight, double FontSize) GetLogStyle(AgentLogType type)

@@ -30,13 +30,18 @@ public sealed class ReActAgent
 
     public async Task<string> RunAsync(string userGoal, CancellationToken cancellationToken = default)
     {
-        _memory.AddConversation("user", userGoal);
-
         var messages = new List<ChatMessage>
         {
-            new("system", BuildSystemPrompt()),
-            new("user", BuildUserPrompt(userGoal))
+            new("system", BuildSystemPrompt())
         };
+
+        foreach (var item in _memory.ConversationHistory)
+        {
+            messages.Add(item);
+        }
+
+        messages.Add(new ChatMessage("user", BuildTaskPrompt(userGoal)));
+        _memory.AddConversation("user", userGoal);
 
         for (var step = 1; step <= _maxSteps; step++)
         {
@@ -103,7 +108,7 @@ public sealed class ReActAgent
         }
 
         return $$"""
-你是一个运行在 WPF 桌面程序中的 Mini Cursor 代码助手，面向 C# / .NET 单文件代码审查、修改和构建诊断。
+你是一个运行在 WPF 桌面程序中的 Mini Cursor 代码助手，面向多种编程语言与文本格式的单文件代码审查、修改和诊断。
 
 你必须使用 ReAct 思路工作：先思考 Thought，再选择一个 Action 工具，读取 Observation 后继续循环，直到给出 FinalAnswer。
 
@@ -121,39 +126,27 @@ JSON 格式只能是：
 
 行为规则：
 1. 每一步只能调用一个工具。
-2. 如果需要了解代码内容，先调用 FileReadTool。
+2. 如果需要了解文件内容，先调用 FileReadTool。
 3. 如果用户要求审查，通常流程是 FileReadTool -> CodeReviewTool -> CodeMetricsTool -> FinalAnswer。
 4. 如果用户要求修改代码，优先使用 ReplaceTextTool 做小范围修改；只有需要整体重写时才用 FileWriteTool。
-5. 写入代码前，必须确保 actionInput 中的新代码或替换文本是完整、准确的。
-6. 如果用户要求检查是否能编译，可以调用 BuildTool。BuildTool 会自动寻找当前文件上级目录中的 .csproj。
-7. 最终回答要用中文，说明：做了哪些工具调用、发现了什么问题、是否修改了文件、下一步建议。
-8. 不要编造不存在的工具。只能使用上面列出的工具。
+5. 写入前，必须确保 actionInput 中的新内容完整、准确，并符合当前文件的语言/格式。
+6. 根据当前文件类型选择合适的审查与修改方式；不要默认按某一种语言处理。
+7. BuildTool 仅适用于当前文件位于 .NET 项目（能找到 .csproj）且用户明确要求编译/构建时；其他语言项目不要强行调用。
+8. 最终回答要用中文，说明：做了哪些工具调用、发现了什么问题、是否修改了文件、下一步建议。
+9. 不要编造不存在的工具。只能使用上面列出的工具。
+10. 你可以参考之前的对话历史；若用户说「刚才」「上次」「继续」等，应结合历史理解其意图。
+
+【当前会话上下文】
+{{_memory.BuildMemorySummary()}}
 """;
     }
 
-    private string BuildUserPrompt(string userGoal)
+    private string BuildTaskPrompt(string userGoal)
     {
-        var history = new StringBuilder();
-        foreach (var item in _memory.ConversationHistory.TakeLast(8))
-        {
-            history.AppendLine($"{item.Role}: {TrimForPrompt(item.Content, 800)}");
-        }
-
         return $$"""
-用户任务：{{userGoal}}
-
-当前上下文：
-{{_memory.BuildMemorySummary()}}
-
-最近对话历史：
-{{history}}
+{{userGoal}}
 
 请从第一步开始执行 Agent Loop。记住：只输出一个合法 JSON 对象。
 """;
-    }
-
-    private static string TrimForPrompt(string text, int maxLength)
-    {
-        return text.Length <= maxLength ? text : text[..maxLength] + "...（已截断）";
     }
 }

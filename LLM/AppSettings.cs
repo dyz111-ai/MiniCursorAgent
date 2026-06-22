@@ -7,14 +7,14 @@ public sealed class AppSettings
 {
     public string DeepSeekApiKey { get; init; } = string.Empty;
     public string DeepSeekBaseUrl { get; init; } = "https://api.deepseek.com";
-    public string DeepSeekModel { get; init; } = "deepseek-chat";
+    public string DeepSeekModel { get; init; } = "deepseek-v4-flash";
     public int AgentMaxSteps { get; init; } = 6;
 
     public static AppSettings Load()
     {
         var apiKey = Environment.GetEnvironmentVariable("DEEPSEEK_API_KEY") ?? string.Empty;
         var baseUrl = "https://api.deepseek.com";
-        var model = "deepseek-chat";
+        var model = "deepseek-v4-flash";
         var maxSteps = 6;
 
         var appSettingsPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");

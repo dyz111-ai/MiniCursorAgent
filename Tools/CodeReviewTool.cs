@@ -1,14 +1,18 @@
 using MiniCursorAgent.Memory;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace MiniCursorAgent.Tools;
 
 public sealed class CodeReviewTool : IAgentTool
 {
+    private static readonly Regex EmptyCatchPattern = new(@"^\s*catch\s*(\([^)]*\))?\s*\{\s*\}\s*$", RegexOptions.Compiled);
+    private static readonly Regex HardcodedSecretPattern = new(@"(password|passwd|api[_-]?key|secret|token)\s*=\s*[""'][^""']+[""']", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     public string Name => "CodeReviewTool";
 
-    public string Description => "基于固定规则审查 C# 代码，发现常见问题。输入：{\"code\":\"可选，不传则审查当前编辑器代码\"}";
+    public string Description => "基于通用规则审查当前文件代码，发现常见问题。输入：{\"code\":\"可选，不传则审查当前编辑器内容\"}";
 
     public Task<string> ExecuteAsync(JsonElement input, AgentMemory memory, CancellationToken cancellationToken = default)
     {
@@ -20,7 +24,7 @@ public sealed class CodeReviewTool : IAgentTool
 
         if (string.IsNullOrWhiteSpace(code))
         {
-            return Task.FromResult("CodeReviewTool 错误：没有可审查的代码。请先调用 FileReadTool。 ");
+            return Task.FromResult("CodeReviewTool 错误：没有可审查的内容。请先调用 FileReadTool。");
         }
 
         var lines = code.Replace("\r\n", "\n").Split('\n');
@@ -32,51 +36,48 @@ public sealed class CodeReviewTool : IAgentTool
             var line = lines[i];
             var trimmed = line.Trim();
 
-            if (trimmed.Contains("async void", StringComparison.Ordinal))
+            if (trimmed.Contains("TODO", StringComparison.OrdinalIgnoreCase) ||
+                trimmed.Contains("FIXME", StringComparison.OrdinalIgnoreCase) ||
+                trimmed.Contains("HACK", StringComparison.OrdinalIgnoreCase))
             {
-                issues.Add($"第 {lineNumber} 行：出现 async void。除事件处理器外，建议改为 async Task，便于异常传播和测试。");
-            }
-
-            if (trimmed.Contains(".Result", StringComparison.Ordinal) || trimmed.Contains(".Wait()", StringComparison.Ordinal))
-            {
-                issues.Add($"第 {lineNumber} 行：同步等待异步任务，可能造成死锁或阻塞。建议改用 await。");
-            }
-
-            if (trimmed.Contains("File.ReadAllText(", StringComparison.Ordinal))
-            {
-                issues.Add($"第 {lineNumber} 行：使用同步文件读取。若在 UI 或服务端场景中，建议改为 File.ReadAllTextAsync。");
-            }
-
-            if (trimmed.Contains("File.WriteAllText(", StringComparison.Ordinal))
-            {
-                issues.Add($"第 {lineNumber} 行：使用同步文件写入。建议改为 File.WriteAllTextAsync，并加入异常处理。");
-            }
-
-            if (trimmed.StartsWith("catch", StringComparison.OrdinalIgnoreCase) && trimmed.Contains("Exception", StringComparison.Ordinal))
-            {
-                issues.Add($"第 {lineNumber} 行：捕获 Exception 范围较大。建议记录异常信息，并尽量捕获更具体的异常类型。");
-            }
-
-            if (trimmed is "catch" or "catch()" or "catch {" or "catch{}")
-            {
-                issues.Add($"第 {lineNumber} 行：存在空 catch 或无异常变量的 catch，可能吞掉错误。建议至少记录日志。");
-            }
-
-            if (trimmed.Contains("TODO", StringComparison.OrdinalIgnoreCase) || trimmed.Contains("FIXME", StringComparison.OrdinalIgnoreCase))
-            {
-                issues.Add($"第 {lineNumber} 行：存在 TODO/FIXME，提交前需要确认是否已处理。");
+                issues.Add($"第 {lineNumber} 行：存在 TODO/FIXME/HACK 标记，提交前请确认是否已处理。");
             }
 
             if (trimmed.Length > 140)
             {
-                issues.Add($"第 {lineNumber} 行：单行长度超过 140 个字符，可读性较差。建议拆分。");
+                issues.Add($"第 {lineNumber} 行：单行长度超过 140 个字符，可读性较差，建议拆分。");
+            }
+
+            if (EmptyCatchPattern.IsMatch(trimmed))
+            {
+                issues.Add($"第 {lineNumber} 行：存在空 catch 块，可能吞掉错误。建议至少记录日志或重新抛出。");
+            }
+
+            if (HardcodedSecretPattern.IsMatch(trimmed))
+            {
+                issues.Add($"第 {lineNumber} 行：疑似硬编码密码/密钥/令牌，建议使用环境变量或配置文件。");
+            }
+
+            if (trimmed.Contains("eval(", StringComparison.OrdinalIgnoreCase))
+            {
+                issues.Add($"第 {lineNumber} 行：使用 eval()，存在安全风险，建议避免。");
+            }
+
+            if (trimmed.Contains("debugger", StringComparison.OrdinalIgnoreCase))
+            {
+                issues.Add($"第 {lineNumber} 行：疑似调试断点语句，发布前建议移除。");
+            }
+
+            if (Regex.IsMatch(trimmed, @"^\s*//.*\?\?\?|\s*#.*\?\?\?"))
+            {
+                issues.Add($"第 {lineNumber} 行：存在未完成的占位注释（???），可能需要补全。");
             }
         }
 
-        if (!code.Contains("try", StringComparison.OrdinalIgnoreCase) &&
-            (code.Contains("File.", StringComparison.Ordinal) || code.Contains("HttpClient", StringComparison.Ordinal)))
+        if (code.Contains("http://", StringComparison.OrdinalIgnoreCase) &&
+            !code.Contains("https://", StringComparison.OrdinalIgnoreCase))
         {
-            issues.Add("整体问题：代码涉及文件或网络操作，但没有明显异常处理。建议增加 try-catch，并给用户返回可理解的错误信息。");
+            issues.Add("整体问题：检测到明文 http:// 链接，若涉及网络请求，建议优先使用 HTTPS。");
         }
 
         var builder = new StringBuilder();
@@ -85,7 +86,7 @@ public sealed class CodeReviewTool : IAgentTool
 
         if (issues.Count == 0)
         {
-            builder.AppendLine("未发现明显规则问题。仍建议结合业务逻辑继续人工检查。 ");
+            builder.AppendLine("未发现明显通用规则问题。仍建议结合具体语言与业务逻辑继续人工检查。");
         }
         else
         {

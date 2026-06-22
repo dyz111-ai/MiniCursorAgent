@@ -5,13 +5,13 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:avalon="http://icsharpcode.net/sharpdevelop/avalonedit"
         mc:Ignorable="d"
-        Title="Mini Cursor Agent - .NET AI 编程助手"
+        Title="Mini Cursor Agent - 通用 AI 编程助手"
         Width="1280" Height="780"
         MinWidth="1000" MinHeight="640"
         WindowStartupLocation="CenterScreen">
     <DockPanel>
         <ToolBar DockPanel.Dock="Top" Padding="6">
-            <Button x:Name="OpenButton" Content="打开 C# 文件" Padding="10,4" Margin="0,0,6,0" Click="OpenButton_Click" />
+            <Button x:Name="OpenButton" Content="打开文件" Padding="10,4" Margin="0,0,6,0" Click="OpenButton_Click" />
             <Button x:Name="SaveButton" Content="保存当前文件" Padding="10,4" Margin="0,0,6,0" Click="SaveButton_Click" IsEnabled="False" />
             <Button x:Name="ReloadButton" Content="重新加载" Padding="10,4" Margin="0,0,6,0" Click="ReloadButton_Click" IsEnabled="False" />
             <Separator />
@@ -31,17 +31,41 @@
             <Grid Grid.Column="0">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
                 <Border Grid.Row="0" Background="#F3F4F6" Padding="10,6" BorderBrush="#DDDDDD" BorderThickness="0,0,0,1">
                     <TextBlock Text="代码编辑区" FontWeight="Bold" />
                 </Border>
+                <Border x:Name="DiffBanner"
+                        Grid.Row="1"
+                        Visibility="Collapsed"
+                        Background="#FFF8E1"
+                        Padding="10,6"
+                        BorderBrush="#F0E6B2"
+                        BorderThickness="0,0,0,1">
+                    <StackPanel Orientation="Horizontal">
+                        <Border Background="#D9F2D9" Padding="8,3" Margin="0,0,8,0" CornerRadius="3">
+                            <TextBlock Text="绿色 = 新增行" Foreground="#1B5E20" FontSize="12" />
+                        </Border>
+                        <Border Background="#FFD6D6" Padding="8,3" Margin="0,0,12,0" CornerRadius="3">
+                            <TextBlock Text="红色 = 删除行" Foreground="#B71C1C" FontSize="12" />
+                        </Border>
+                        <TextBlock Text="Diff 预览模式（显示本次 Agent 修改）"
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,12,0"
+                                   Foreground="#6B5B00" />
+                        <Button x:Name="ExitDiffButton"
+                                Content="退出 Diff 预览"
+                                Padding="10,4"
+                                Click="ExitDiffButton_Click" />
+                    </StackPanel>
+                </Border>
                 <avalon:TextEditor x:Name="CodeEditor"
-                                   Grid.Row="1"
+                                   Grid.Row="2"
                                    FontFamily="Consolas"
                                    FontSize="14"
                                    ShowLineNumbers="True"
-                                   SyntaxHighlighting="C#"
                                    WordWrap="False"
                                    HorizontalScrollBarVisibility="Auto"
                                    VerticalScrollBarVisibility="Auto" />
