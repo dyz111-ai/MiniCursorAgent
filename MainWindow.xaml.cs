@@ -33,6 +33,7 @@ public partial class MainWindow : Window
     private readonly object _streamLock = new();
     private DispatcherTimer? _streamTimer;
     private Run? _streamRun;
+    private volatile bool _streamTimerStarted;
 
     public MainWindow(
         AppSettings settings,
@@ -284,10 +285,15 @@ public partial class MainWindow : Window
     {
         if (type == AgentLogType.Streaming)
         {
-            // Never touch the UI thread here — just buffer the token.
-            // FlushStreamBuffer() will pick it up within 40 ms.
+            // Buffer only — never block on or flood the UI thread.
             lock (_streamLock) { _streamBuffer.Append(message); }
-            Dispatcher.BeginInvoke(DispatcherPriority.Normal, () => _streamTimer?.Start());
+            // Start the flush timer once per streaming session (not once per token).
+            // Background priority keeps user Input events (priority 5) ahead of us (4).
+            if (!_streamTimerStarted)
+            {
+                _streamTimerStarted = true;
+                Dispatcher.BeginInvoke(DispatcherPriority.Background, () => _streamTimer?.Start());
+            }
             return;
         }
 
@@ -344,6 +350,7 @@ public partial class MainWindow : Window
     // Called on the UI thread before appending any non-streaming log entry.
     private void FinalizeStreamBlock()
     {
+        _streamTimerStarted = false;
         _streamTimer?.Stop();
         FlushStreamBuffer();
         _streamRun = null;

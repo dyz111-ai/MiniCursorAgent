@@ -108,22 +108,26 @@ public sealed class DeepSeekClient
             JsonSerializer.Serialize(payload, new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull }),
             Encoding.UTF8, "application/json");
 
-        using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        // ConfigureAwait(false) moves SSE reading off the UI thread so the
+        // WPF dispatcher stays free to handle user input during streaming.
+        using var response = await _httpClient
+            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+            .ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
-            var errorText = await response.Content.ReadAsStringAsync(cancellationToken);
+            var errorText = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             _logger.LogError("DeepSeek API 流式请求失败：{StatusCode} {Reason}", (int)response.StatusCode, response.ReasonPhrase);
             throw new InvalidOperationException($"DeepSeek API 请求失败：{(int)response.StatusCode} {response.ReasonPhrase}\n{errorText}");
         }
 
         var sb = new StringBuilder();
-        using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         using var reader = new StreamReader(stream);
 
-        while (!reader.EndOfStream && !cancellationToken.IsCancellationRequested)
+        while (!cancellationToken.IsCancellationRequested)
         {
-            var line = await reader.ReadLineAsync();
+            var line = await reader.ReadLineAsync().ConfigureAwait(false);
             if (line is null) break;
             if (!line.StartsWith("data: ", StringComparison.Ordinal)) continue;
 
