@@ -6,6 +6,7 @@ using MiniCursorAgent.Memory;
 using MiniCursorAgent.Models;
 using MiniCursorAgent.Services;
 using MiniCursorAgent.Tools;
+using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using System.Windows;
@@ -41,6 +42,7 @@ public partial class MainWindow : Window
         IEnumerable<IAgentTool> tools,
         AgentMemory memory,
         RagStore ragStore,
+        AgentCoordinator coordinator,
         ILogger<MainWindow> logger)
     {
         InitializeComponent();
@@ -49,7 +51,7 @@ public partial class MainWindow : Window
         _ragStore = ragStore;
         _logger = logger;
         _diffHighlighter = new EditorDiffHighlighter(CodeEditor);
-        _agent = new ReActAgent(client, tools, memory, settings.AgentMaxSteps, AppendAgentLog, ragStore);
+        _agent = new ReActAgent(client, tools, memory, settings.AgentMaxSteps, AppendAgentLog, ragStore, coordinator);
 
         _streamTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher)
         {

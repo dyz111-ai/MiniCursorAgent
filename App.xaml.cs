@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using MiniCursorAgent.Agents;
 using MiniCursorAgent.LLM;
 using MiniCursorAgent.Memory;
 using MiniCursorAgent.Services;
@@ -44,7 +45,7 @@ public partial class App : Application
         services.AddSingleton<IAgentTool, ReplaceTextTool>();
         services.AddSingleton<IAgentTool, FileWriteTool>();
         services.AddSingleton<IAgentTool, BuildTool>();
-        services.AddSingleton<IAgentTool, DelegateSubAgentTool>();
+        services.AddSingleton<AgentCoordinator>();
 
         services.AddSingleton<McpServer>();
         services.AddSingleton<MainWindow>();

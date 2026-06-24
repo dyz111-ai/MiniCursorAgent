@@ -3,6 +3,7 @@ using MiniCursorAgent.Memory;
 using MiniCursorAgent.Models;
 using MiniCursorAgent.Tools;
 using System.Text;
+using System.Text.Json;
 
 namespace MiniCursorAgent.Agents;
 
@@ -12,6 +13,7 @@ public sealed class ReActAgent
     private readonly Dictionary<string, IAgentTool> _tools;
     private readonly AgentMemory _memory;
     private readonly RagStore? _ragStore;
+    private readonly AgentCoordinator? _coordinator;
     private readonly int _maxSteps;
     private readonly Action<string, AgentLogType> _log;
 
@@ -21,12 +23,14 @@ public sealed class ReActAgent
         AgentMemory memory,
         int maxSteps,
         Action<string, AgentLogType> log,
-        RagStore? ragStore = null)
+        RagStore? ragStore = null,
+        AgentCoordinator? coordinator = null)
     {
         _llm = llm;
-        _tools = tools.ToDictionary(tool => tool.Name, StringComparer.OrdinalIgnoreCase);
+        _tools = tools.ToDictionary(t => t.Name, StringComparer.OrdinalIgnoreCase);
         _memory = memory;
         _ragStore = ragStore;
+        _coordinator = coordinator;
         _maxSteps = maxSteps;
         _log = log;
         _memory.LogCallback = log;
@@ -34,32 +38,38 @@ public sealed class ReActAgent
 
     public async Task<string> RunAsync(string userGoal, CancellationToken cancellationToken = default)
     {
-        var messages = new List<ChatMessage>
+        // 1. 并行多 Agent 预分析（有代码文件时自动触发）
+        var parallelReport = string.Empty;
+        if (_coordinator is not null && !string.IsNullOrEmpty(_memory.CurrentCode))
         {
-            new("system", BuildSystemPrompt())
-        };
-
-        foreach (var item in _memory.ConversationHistory)
-        {
-            messages.Add(item);
+            parallelReport = await _coordinator.RunParallelAnalysisAsync(
+                _memory, userGoal, _log, cancellationToken);
         }
 
+        // 2. RAG 知识库检索
         var ragContext = _ragStore?.Search(userGoal, topK: 3);
         if (ragContext?.Count > 0)
             _log($"📚 RAG 检索到 {ragContext.Count} 条相关知识，已注入上下文。\n", AgentLogType.System);
 
-        messages.Add(new ChatMessage("user", BuildTaskPrompt(userGoal, ragContext)));
+        // 3. 组装主 Agent 消息列表
+        var messages = new List<ChatMessage> { new("system", BuildSystemPrompt()) };
+        foreach (var item in _memory.ConversationHistory)
+            messages.Add(item);
+
+        messages.Add(new ChatMessage("user", BuildTaskPrompt(userGoal, parallelReport, ragContext)));
         _memory.AddConversation("user", userGoal);
 
+        // 4. 主 Agent ReAct 循环
         for (var step = 1; step <= _maxSteps; step++)
         {
-            _log($"\n--- Step {step}/{_maxSteps} ---\n", AgentLogType.Step);
+            _log($"\n--- 主 Agent Step {step}/{_maxSteps} ---\n", AgentLogType.Step);
 
             _log("🔄 ", AgentLogType.Streaming);
             var rawResponse = await _llm.ChatStreamingAsync(messages,
                 token => _log(token, AgentLogType.Streaming),
                 cancellationToken);
             _log("\n", AgentLogType.Streaming);
+
             AgentDecision decision;
             try
             {
@@ -67,11 +77,11 @@ public sealed class ReActAgent
             }
             catch (Exception ex)
             {
-                _log("❌ LLM 回复解析失败：" + ex.Message + "\n", AgentLogType.Error);
-                _log("原始回复：\n" + rawResponse + "\n", AgentLogType.Error);
-
+                _log("❌ 解析失败：" + ex.Message + "\n", AgentLogType.Error);
                 messages.Add(new ChatMessage("assistant", rawResponse));
-                messages.Add(new ChatMessage("user", "你的上一条回复不是合法 JSON。请只返回 JSON：{\"thought\":\"...\",\"action\":\"ToolName 或 FinalAnswer\",\"actionInput\":{...}}，不要输出 Markdown。"));
+                messages.Add(new ChatMessage("user",
+                    "你的上一条回复不是合法 JSON。请只返回 JSON：" +
+                    "{\"thought\":\"...\",\"action\":\"ToolName 或 FinalAnswer\",\"actionInput\":{...}}"));
                 continue;
             }
 
@@ -81,32 +91,30 @@ public sealed class ReActAgent
 
             if (decision.Action.Equals("FinalAnswer", StringComparison.OrdinalIgnoreCase))
             {
-                var answer = decision.ActionInput.ValueKind == System.Text.Json.JsonValueKind.Object &&
-                             decision.ActionInput.TryGetProperty("answer", out var answerElement)
-                    ? answerElement.GetString() ?? string.Empty
+                var answer = decision.ActionInput.ValueKind == JsonValueKind.Object &&
+                             decision.ActionInput.TryGetProperty("answer", out var ae)
+                    ? ae.GetString() ?? string.Empty
                     : decision.ActionInput.ToString();
-
                 _memory.AddConversation("assistant", answer);
                 return answer;
             }
 
             if (!_tools.TryGetValue(decision.Action, out var tool))
             {
-                var unknownToolObservation = $"未知工具：{decision.Action}。可用工具：{string.Join(", ", _tools.Keys)}。";
-                _log("Observation: " + unknownToolObservation + "\n", AgentLogType.Observation);
+                var msg = $"未知工具：{decision.Action}。可用工具：{string.Join(", ", _tools.Keys)}。";
+                _log("Observation: " + msg + "\n", AgentLogType.Observation);
                 messages.Add(new ChatMessage("assistant", rawResponse));
-                messages.Add(new ChatMessage("user", "Observation: " + unknownToolObservation));
+                messages.Add(new ChatMessage("user", "Observation: " + msg));
                 continue;
             }
 
             var observation = await tool.ExecuteAsync(decision.ActionInput, _memory, cancellationToken);
             _log("📤 Observation:\n" + observation + "\n", AgentLogType.Observation);
-
             messages.Add(new ChatMessage("assistant", rawResponse));
             messages.Add(new ChatMessage("user", $"Observation from {tool.Name}:\n{observation}"));
         }
 
-        var fallback = "达到最大 Agent Loop 步数限制。请缩小任务范围，或增加 Agent:MaxSteps。";
+        var fallback = "达到最大步数限制，请缩小任务范围或增加 Agent:MaxSteps。";
         _memory.AddConversation("assistant", fallback);
         return fallback;
     }
@@ -115,48 +123,59 @@ public sealed class ReActAgent
     {
         var toolDescriptions = new StringBuilder();
         foreach (var tool in _tools.Values)
-        {
             toolDescriptions.AppendLine($"- {tool.Name}: {tool.Description}");
-        }
 
         return $$"""
-你是一个运行在 WPF 桌面程序中的 Mini Cursor 代码助手，面向多种编程语言与文本格式的单文件代码审查、修改和诊断。
+你是 Mini Cursor Agent 的主智能体，运行在 WPF 桌面程序中，专注于代码审查、修改和诊断。
 
-你必须使用 ReAct 思路工作：先思考 Thought，再选择一个 Action 工具，读取 Observation 后继续循环，直到给出 FinalAnswer。
+【多智能体架构说明】
+在你开始工作之前，协调者（Coordinator）已自动并行派发 4 个专业子智能体
+（安全分析、文档质量、性能分析、重构建议）对当前代码进行分析。
+你将在任务消息中看到这些子智能体的报告，可以直接参考和引用，无需重复分析。
 
-【非常重要：你的每一次回复必须只输出一个合法 JSON 对象，不要输出 Markdown，不要输出代码块围栏。】
-JSON 格式只能是：
+你的核心职责：
+- 综合子智能体的分析报告，做出准确判断
+- 使用工具执行具体操作（读取文件、修改代码、构建验证等）
+- 给用户一份清晰、可操作的最终答复
+
+工作格式（ReAct）：每次只输出一个合法 JSON，不要输出 Markdown 或代码围栏：
 {
-  "thought": "说明你当前为什么要做这一步",
+  "thought": "当前思考和判断",
   "action": "工具名或 FinalAnswer",
   "actionInput": { }
 }
 
 可用工具：
 {{toolDescriptions}}
-- FinalAnswer: 结束任务。输入：{"answer":"给用户的最终答复"}
+- FinalAnswer: 完成任务，输出最终答复。输入：{"answer":"..."}
 
 行为规则：
-1. 每一步只能调用一个工具。
-2. 如果需要了解文件内容，先调用 FileReadTool。
-3. 如果用户要求审查，通常流程是 FileReadTool -> CodeReviewTool -> CodeMetricsTool -> FinalAnswer。
-4. 如果用户要求修改代码，优先使用 ReplaceTextTool 做小范围修改；只有需要整体重写时才用 FileWriteTool。
-5. 写入前，必须确保 actionInput 中的新内容完整、准确，并符合当前文件的语言/格式。
-6. 根据当前文件类型选择合适的审查与修改方式；不要默认按某一种语言处理。
-7. BuildTool 仅适用于当前文件位于 .NET 项目（能找到 .csproj）且用户明确要求编译/构建时；其他语言项目不要强行调用。
-8. 最终回答要用中文，说明：做了哪些工具调用、发现了什么问题、是否修改了文件、下一步建议。
-9. 不要编造不存在的工具。只能使用上面列出的工具。
-10. 你可以参考之前的对话历史；若用户说「刚才」「上次」「继续」等，应结合历史理解其意图。
+1. 每步只调用一个工具。
+2. 子智能体报告已覆盖分析，你应直接利用；若报告不足再调用 FileReadTool/CodeReviewTool 补充。
+3. 修改代码优先用 ReplaceTextTool（小改动），整体重写用 FileWriteTool。
+4. 修改后建议调用 BuildTool 验证（仅限 .NET 项目且用户明确要求构建时）。
+5. 最终答复用中文，涵盖：问题摘要、已执行操作、具体建议。
+6. 只使用列出的工具，不要编造工具名。
+7. 结合对话历史理解"继续""上次"等指代。
 
 【当前会话上下文】
 {{_memory.BuildMemorySummary()}}
 """;
     }
 
-    private string BuildTaskPrompt(string userGoal,
-        List<(string Content, string Title, double Score)>? ragContext = null)
+    private string BuildTaskPrompt(
+        string userGoal,
+        string parallelReport,
+        List<(string Content, string Title, double Score)>? ragContext)
     {
         var sb = new StringBuilder();
+
+        if (!string.IsNullOrWhiteSpace(parallelReport))
+        {
+            sb.AppendLine(parallelReport);
+            sb.AppendLine("---");
+            sb.AppendLine();
+        }
 
         if (ragContext?.Count > 0)
         {
@@ -171,8 +190,8 @@ JSON 格式只能是：
             sb.AppendLine();
         }
 
-        sb.AppendLine(userGoal);
-        sb.AppendLine("\n请从第一步开始执行 Agent Loop。记住：只输出一个合法 JSON 对象。");
+        sb.AppendLine($"【用户任务】{userGoal}");
+        sb.AppendLine("\n请基于以上分析报告，开始执行 Agent Loop。每次只输出一个合法 JSON 对象。");
         return sb.ToString();
     }
 }
