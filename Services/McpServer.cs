@@ -18,12 +18,12 @@ public sealed class McpServer : IDisposable
 
     public const int Port = 3001;
 
-    public McpServer(IEnumerable<IAgentTool> tools, AgentMemory memory, ILogger<McpServer> logger)
+    public McpServer(IEnumerable<IAgentTool> tools, AgentMemory memory, ILogger<McpServer> logger, int port = Port)
     {
         _tools = tools.ToDictionary(t => t.Name, StringComparer.OrdinalIgnoreCase);
         _memory = memory;
         _logger = logger;
-        _listener.Prefixes.Add($"http://localhost:{Port}/mcp/");
+        _listener.Prefixes.Add($"http://localhost:{port}/mcp/");
     }
 
     public void Start()
