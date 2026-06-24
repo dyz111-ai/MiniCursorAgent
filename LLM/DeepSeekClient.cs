@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using MiniCursorAgent.Models;
+using System.IO;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
@@ -76,5 +77,80 @@ public sealed class DeepSeekClient
         }
 
         throw new InvalidOperationException("DeepSeek API 返回格式异常：" + responseText);
+    }
+
+    public async Task<string> ChatStreamingAsync(
+        IEnumerable<ChatMessage> messages,
+        Action<string> onToken,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(_apiKey))
+        {
+            throw new InvalidOperationException("缺少 DeepSeek API Key。请设置环境变量 DEEPSEEK_API_KEY，或在 appsettings.json 中填写 DeepSeek:ApiKey。");
+        }
+
+        var messageList = messages.ToList();
+        _logger.LogDebug("向 DeepSeek API 发送流式请求 (model={Model}, messages={Count})", _model, messageList.Count);
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "chat/completions");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+
+        var payload = new
+        {
+            model = _model,
+            messages = messageList.Select(m => new { role = m.Role, content = m.Content }).ToArray(),
+            temperature = 0.2,
+            max_tokens = 4096,
+            stream = true
+        };
+
+        request.Content = new StringContent(
+            JsonSerializer.Serialize(payload, new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull }),
+            Encoding.UTF8, "application/json");
+
+        using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var errorText = await response.Content.ReadAsStringAsync(cancellationToken);
+            _logger.LogError("DeepSeek API 流式请求失败：{StatusCode} {Reason}", (int)response.StatusCode, response.ReasonPhrase);
+            throw new InvalidOperationException($"DeepSeek API 请求失败：{(int)response.StatusCode} {response.ReasonPhrase}\n{errorText}");
+        }
+
+        var sb = new StringBuilder();
+        using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var reader = new StreamReader(stream);
+
+        while (!reader.EndOfStream && !cancellationToken.IsCancellationRequested)
+        {
+            var line = await reader.ReadLineAsync();
+            if (line is null) break;
+            if (!line.StartsWith("data: ", StringComparison.Ordinal)) continue;
+
+            var data = line[6..];
+            if (data == "[DONE]") break;
+
+            try
+            {
+                using var doc = JsonDocument.Parse(data);
+                if (doc.RootElement.TryGetProperty("choices", out var choices) &&
+                    choices.GetArrayLength() > 0 &&
+                    choices[0].TryGetProperty("delta", out var delta) &&
+                    delta.TryGetProperty("content", out var content))
+                {
+                    var token = content.GetString();
+                    if (!string.IsNullOrEmpty(token))
+                    {
+                        sb.Append(token);
+                        onToken(token);
+                    }
+                }
+            }
+            catch (JsonException) { }
+        }
+
+        var result = sb.ToString();
+        _logger.LogDebug("DeepSeek 流式响应完成，共 {Length} 字符", result.Length);
+        return result;
     }
 }

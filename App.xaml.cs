@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using MiniCursorAgent.LLM;
 using MiniCursorAgent.Memory;
+using MiniCursorAgent.Services;
 using MiniCursorAgent.Tools;
 using System.Windows;
 
@@ -10,6 +11,8 @@ namespace MiniCursorAgent;
 
 public partial class App : Application
 {
+    private ServiceProvider? _provider;
+
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
@@ -33,6 +36,7 @@ public partial class App : Application
         services.AddSingleton(AppSettings.Load(configuration));
         services.AddSingleton<DeepSeekClient>();
         services.AddSingleton<AgentMemory>();
+        services.AddSingleton<RagStore>();
 
         services.AddSingleton<IAgentTool, FileReadTool>();
         services.AddSingleton<IAgentTool, CodeReviewTool>();
@@ -40,11 +44,24 @@ public partial class App : Application
         services.AddSingleton<IAgentTool, ReplaceTextTool>();
         services.AddSingleton<IAgentTool, FileWriteTool>();
         services.AddSingleton<IAgentTool, BuildTool>();
+        services.AddSingleton<IAgentTool, RagSearchTool>();
+        services.AddSingleton<IAgentTool, DelegateSubAgentTool>();
 
+        services.AddSingleton<McpServer>();
         services.AddSingleton<MainWindow>();
 
-        var provider = services.BuildServiceProvider();
-        var mainWindow = provider.GetRequiredService<MainWindow>();
-        mainWindow.Show();
+        _provider = services.BuildServiceProvider();
+
+        var mcp = _provider.GetRequiredService<McpServer>();
+        mcp.Start();
+
+        _provider.GetRequiredService<MainWindow>().Show();
+    }
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        _provider?.GetService<McpServer>()?.Dispose();
+        _provider?.Dispose();
+        base.OnExit(e);
     }
 }

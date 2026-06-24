@@ -19,6 +19,7 @@ namespace MiniCursorAgent;
 public partial class MainWindow : Window
 {
     private readonly AgentMemory _memory;
+    private readonly RagStore _ragStore;
     private readonly ReActAgent _agent;
     private readonly EditorDiffHighlighter _diffHighlighter;
     private readonly ILogger<MainWindow> _logger;
@@ -31,11 +32,13 @@ public partial class MainWindow : Window
         DeepSeekClient client,
         IEnumerable<IAgentTool> tools,
         AgentMemory memory,
+        RagStore ragStore,
         ILogger<MainWindow> logger)
     {
         InitializeComponent();
 
         _memory = memory;
+        _ragStore = ragStore;
         _logger = logger;
         _diffHighlighter = new EditorDiffHighlighter(CodeEditor);
         _agent = new ReActAgent(client, tools, memory, settings.AgentMaxSteps, AppendAgentLog);
@@ -83,8 +86,10 @@ public partial class MainWindow : Window
             _memory.CurrentCode = code;
             _memory.LastWritePath = null;
 
+            _ragStore.Index(code, filePath);
+
             _logger.LogInformation("已打开文件：{FilePath}", filePath);
-            AppendAgentLog($"📂 已打开文件：{filePath}\n", AgentLogType.System);
+            AppendAgentLog($"📂 已打开文件：{filePath}（已建立 RAG 索引，共 {_ragStore.ChunkCount} 个片段）\n", AgentLogType.System);
         }
         catch (Exception ex)
         {
@@ -266,16 +271,39 @@ public partial class MainWindow : Window
     {
         Dispatcher.Invoke(() =>
         {
+            if (type == AgentLogType.Streaming)
+            {
+                if (AgentLogTextBox.Document.Blocks.LastBlock is Paragraph lastPara &&
+                    lastPara.Tag?.ToString() == "streaming" &&
+                    lastPara.Inlines.LastInline is Run lastRun)
+                {
+                    lastRun.Text += message;
+                }
+                else
+                {
+                    var para = new Paragraph { Margin = new Thickness(0, 1, 0, 2), Tag = "streaming" };
+                    var run = new Run(message)
+                    {
+                        Foreground = new SolidColorBrush(Color.FromRgb(0x99, 0x99, 0x99)),
+                        FontSize = 11.5
+                    };
+                    para.Inlines.Add(run);
+                    AgentLogTextBox.Document.Blocks.Add(para);
+                }
+                Dispatcher.BeginInvoke(ScrollAgentLogToEnd, DispatcherPriority.Loaded);
+                return;
+            }
+
             var paragraph = new Paragraph { Margin = new Thickness(0, 1, 0, 2) };
             var (foreground, fontWeight, fontSize) = GetLogStyle(type);
 
-            var run = new Run(message)
+            var textRun = new Run(message)
             {
                 Foreground = foreground,
                 FontWeight = fontWeight,
                 FontSize = fontSize
             };
-            paragraph.Inlines.Add(run);
+            paragraph.Inlines.Add(textRun);
 
             AgentLogTextBox.Document.Blocks.Add(paragraph);
             Dispatcher.BeginInvoke(ScrollAgentLogToEnd, DispatcherPriority.Loaded);
@@ -340,6 +368,7 @@ public partial class MainWindow : Window
             AgentLogType.FinalAnswer => (new SolidColorBrush(Color.FromRgb(0x1A, 0x1A, 0x1A)), FontWeights.Normal, 13),
             AgentLogType.Error => (new SolidColorBrush(Color.FromRgb(0xD9, 0x30, 0x25)), FontWeights.Bold, 13),
             AgentLogType.Divider => (new SolidColorBrush(Color.FromRgb(0xCC, 0xCC, 0xCC)), FontWeights.Normal, 12),
+            AgentLogType.Streaming => (new SolidColorBrush(Color.FromRgb(0x99, 0x99, 0x99)), FontWeights.Normal, 11.5),
             _ => (new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x33)), FontWeights.Normal, 13),
         };
     }

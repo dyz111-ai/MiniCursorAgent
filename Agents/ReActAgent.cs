@@ -26,6 +26,7 @@ public sealed class ReActAgent
         _memory = memory;
         _maxSteps = maxSteps;
         _log = log;
+        _memory.LogCallback = log;
     }
 
     public async Task<string> RunAsync(string userGoal, CancellationToken cancellationToken = default)
@@ -47,7 +48,11 @@ public sealed class ReActAgent
         {
             _log($"\n--- Step {step}/{_maxSteps} ---\n", AgentLogType.Step);
 
-            var rawResponse = await _llm.ChatAsync(messages, cancellationToken);
+            _log("🔄 ", AgentLogType.Streaming);
+            var rawResponse = await _llm.ChatStreamingAsync(messages,
+                token => _log(token, AgentLogType.Streaming),
+                cancellationToken);
+            _log("\n", AgentLogType.Streaming);
             AgentDecision decision;
             try
             {

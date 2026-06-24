@@ -9,6 +9,7 @@ public sealed class AgentMemory
 
     public string? CurrentFilePath { get; set; }
     public string CurrentCode { get; set; } = string.Empty;
+    public Action<string, AgentLogType>? LogCallback { get; set; }
     public string? LastReviewResult { get; set; }
     public string? LastMetricsResult { get; set; }
     public string? LastBuildResult { get; set; }

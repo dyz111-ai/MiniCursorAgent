@@ -12,5 +12,6 @@ public enum AgentLogType
     Observation,
     FinalAnswer,
     Error,
-    Divider
+    Divider,
+    Streaming
 }
