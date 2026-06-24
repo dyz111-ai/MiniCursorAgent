@@ -27,6 +27,13 @@ public partial class MainWindow : Window
     private string? _diffActualContent;
     private bool _isRunning;
 
+    // Streaming: tokens are buffered here from the background HTTP-read thread,
+    // then flushed to the UI in batches every 40ms by _streamTimer.
+    private readonly StringBuilder _streamBuffer = new();
+    private readonly object _streamLock = new();
+    private DispatcherTimer? _streamTimer;
+    private Run? _streamRun;
+
     public MainWindow(
         AppSettings settings,
         DeepSeekClient client,
@@ -42,6 +49,12 @@ public partial class MainWindow : Window
         _logger = logger;
         _diffHighlighter = new EditorDiffHighlighter(CodeEditor);
         _agent = new ReActAgent(client, tools, memory, settings.AgentMaxSteps, AppendAgentLog);
+
+        _streamTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher)
+        {
+            Interval = TimeSpan.FromMilliseconds(40)
+        };
+        _streamTimer.Tick += (_, _) => FlushStreamBuffer();
 
         AppendAgentLog("Mini Cursor Agent 已启动。\n", AgentLogType.System);
         AppendAgentLog("使用前请先打开一个代码/文本文件，然后在右侧输入任务。\n", AgentLogType.System);
@@ -269,30 +282,20 @@ public partial class MainWindow : Window
 
     private void AppendAgentLog(string message, AgentLogType type = AgentLogType.Info)
     {
+        if (type == AgentLogType.Streaming)
+        {
+            // Never touch the UI thread here — just buffer the token.
+            // FlushStreamBuffer() will pick it up within 40 ms.
+            lock (_streamLock) { _streamBuffer.Append(message); }
+            Dispatcher.BeginInvoke(DispatcherPriority.Normal, () => _streamTimer?.Start());
+            return;
+        }
+
+        // Non-streaming: synchronous dispatch so ordered log entries stay ordered.
         Dispatcher.Invoke(() =>
         {
-            if (type == AgentLogType.Streaming)
-            {
-                if (AgentLogTextBox.Document.Blocks.LastBlock is Paragraph lastPara &&
-                    lastPara.Tag?.ToString() == "streaming" &&
-                    lastPara.Inlines.LastInline is Run lastRun)
-                {
-                    lastRun.Text += message;
-                }
-                else
-                {
-                    var para = new Paragraph { Margin = new Thickness(0, 1, 0, 2), Tag = "streaming" };
-                    var run = new Run(message)
-                    {
-                        Foreground = new SolidColorBrush(Color.FromRgb(0x99, 0x99, 0x99)),
-                        FontSize = 11.5
-                    };
-                    para.Inlines.Add(run);
-                    AgentLogTextBox.Document.Blocks.Add(para);
-                }
-                Dispatcher.BeginInvoke(ScrollAgentLogToEnd, DispatcherPriority.Loaded);
-                return;
-            }
+            // Stop buffering and push any remaining streaming tokens first.
+            FinalizeStreamBlock();
 
             var paragraph = new Paragraph { Margin = new Thickness(0, 1, 0, 2) };
             var (foreground, fontWeight, fontSize) = GetLogStyle(type);
@@ -304,12 +307,46 @@ public partial class MainWindow : Window
                 FontSize = fontSize
             };
             paragraph.Inlines.Add(textRun);
-
             AgentLogTextBox.Document.Blocks.Add(paragraph);
             Dispatcher.BeginInvoke(ScrollAgentLogToEnd, DispatcherPriority.Loaded);
         });
 
         _ = AppLogger.WriteAsync(message);
+    }
+
+    // Called on the UI thread by DispatcherTimer every 40 ms while streaming.
+    private void FlushStreamBuffer()
+    {
+        string chunk;
+        lock (_streamLock)
+        {
+            if (_streamBuffer.Length == 0) return;
+            chunk = _streamBuffer.ToString();
+            _streamBuffer.Clear();
+        }
+
+        if (_streamRun is null)
+        {
+            var para = new Paragraph { Margin = new Thickness(0, 1, 0, 2), Tag = "streaming" };
+            _streamRun = new Run
+            {
+                Foreground = new SolidColorBrush(Color.FromRgb(0x99, 0x99, 0x99)),
+                FontSize = 11.5
+            };
+            para.Inlines.Add(_streamRun);
+            AgentLogTextBox.Document.Blocks.Add(para);
+        }
+
+        _streamRun.Text += chunk;
+        ScrollAgentLogToEnd();
+    }
+
+    // Called on the UI thread before appending any non-streaming log entry.
+    private void FinalizeStreamBlock()
+    {
+        _streamTimer?.Stop();
+        FlushStreamBuffer();
+        _streamRun = null;
     }
 
     private void AppendFormattedFinalAnswer(string content)
