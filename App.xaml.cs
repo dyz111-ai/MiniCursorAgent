@@ -44,7 +44,6 @@ public partial class App : Application
         services.AddSingleton<IAgentTool, ReplaceTextTool>();
         services.AddSingleton<IAgentTool, FileWriteTool>();
         services.AddSingleton<IAgentTool, BuildTool>();
-        services.AddSingleton<IAgentTool, RagSearchTool>();
         services.AddSingleton<IAgentTool, DelegateSubAgentTool>();
 
         services.AddSingleton<McpServer>();

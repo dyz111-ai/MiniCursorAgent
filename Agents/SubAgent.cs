@@ -111,7 +111,6 @@ public sealed class SubAgent
 可用工具：
 - FileReadTool: 读取当前代码文件。输入：{"path":"可选"}
 - CodeReviewTool: 静态代码审查。输入：{}
-- RagSearchTool: 在代码知识库中搜索相关片段。输入：{"query":"..."}
 - FinalAnswer: 结束，输入：{"answer":"安全分析报告"}
 """,
         "docs" => """
@@ -124,7 +123,6 @@ public sealed class SubAgent
 可用工具：
 - FileReadTool: 读取当前代码文件。输入：{"path":"可选"}
 - CodeReviewTool: 静态代码审查（含TODO/FIXME检测）。输入：{}
-- RagSearchTool: 在代码知识库中搜索相关片段。输入：{"query":"..."}
 - FinalAnswer: 结束，输入：{"answer":"文档质量分析报告"}
 """,
         _ => """

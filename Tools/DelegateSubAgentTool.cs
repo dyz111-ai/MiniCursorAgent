@@ -13,7 +13,7 @@ public sealed class DelegateSubAgentTool : IAgentTool
 
     private static readonly HashSet<string> ReadOnlyToolNames = new(StringComparer.OrdinalIgnoreCase)
     {
-        "FileReadTool", "CodeReviewTool", "CodeMetricsTool", "RagSearchTool"
+        "FileReadTool", "CodeReviewTool", "CodeMetricsTool"
     };
 
     public string Name => "DelegateSubAgentTool";

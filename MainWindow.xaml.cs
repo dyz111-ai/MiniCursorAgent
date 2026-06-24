@@ -49,7 +49,7 @@ public partial class MainWindow : Window
         _ragStore = ragStore;
         _logger = logger;
         _diffHighlighter = new EditorDiffHighlighter(CodeEditor);
-        _agent = new ReActAgent(client, tools, memory, settings.AgentMaxSteps, AppendAgentLog);
+        _agent = new ReActAgent(client, tools, memory, settings.AgentMaxSteps, AppendAgentLog, ragStore);
 
         _streamTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher)
         {
@@ -100,10 +100,8 @@ public partial class MainWindow : Window
             _memory.CurrentCode = code;
             _memory.LastWritePath = null;
 
-            _ragStore.Index(code, filePath);
-
             _logger.LogInformation("已打开文件：{FilePath}", filePath);
-            AppendAgentLog($"📂 已打开文件：{filePath}（已建立 RAG 索引，共 {_ragStore.ChunkCount} 个片段）\n", AgentLogType.System);
+            AppendAgentLog($"📂 已打开文件：{filePath}\n", AgentLogType.System);
         }
         catch (Exception ex)
         {

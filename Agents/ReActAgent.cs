@@ -11,6 +11,7 @@ public sealed class ReActAgent
     private readonly DeepSeekClient _llm;
     private readonly Dictionary<string, IAgentTool> _tools;
     private readonly AgentMemory _memory;
+    private readonly RagStore? _ragStore;
     private readonly int _maxSteps;
     private readonly Action<string, AgentLogType> _log;
 
@@ -19,11 +20,13 @@ public sealed class ReActAgent
         IEnumerable<IAgentTool> tools,
         AgentMemory memory,
         int maxSteps,
-        Action<string, AgentLogType> log)
+        Action<string, AgentLogType> log,
+        RagStore? ragStore = null)
     {
         _llm = llm;
         _tools = tools.ToDictionary(tool => tool.Name, StringComparer.OrdinalIgnoreCase);
         _memory = memory;
+        _ragStore = ragStore;
         _maxSteps = maxSteps;
         _log = log;
         _memory.LogCallback = log;
@@ -41,7 +44,11 @@ public sealed class ReActAgent
             messages.Add(item);
         }
 
-        messages.Add(new ChatMessage("user", BuildTaskPrompt(userGoal)));
+        var ragContext = _ragStore?.Search(userGoal, topK: 3);
+        if (ragContext?.Count > 0)
+            _log($"📚 RAG 检索到 {ragContext.Count} 条相关知识，已注入上下文。\n", AgentLogType.System);
+
+        messages.Add(new ChatMessage("user", BuildTaskPrompt(userGoal, ragContext)));
         _memory.AddConversation("user", userGoal);
 
         for (var step = 1; step <= _maxSteps; step++)
@@ -146,12 +153,26 @@ JSON 格式只能是：
 """;
     }
 
-    private string BuildTaskPrompt(string userGoal)
+    private string BuildTaskPrompt(string userGoal,
+        List<(string Content, string Title, double Score)>? ragContext = null)
     {
-        return $$"""
-{{userGoal}}
+        var sb = new StringBuilder();
 
-请从第一步开始执行 Agent Loop。记住：只输出一个合法 JSON 对象。
-""";
+        if (ragContext?.Count > 0)
+        {
+            sb.AppendLine("【相关 C# 知识库参考（RAG 自动检索）】");
+            foreach (var (content, title, score) in ragContext)
+            {
+                sb.AppendLine($"▸ {title}（相关度 {score:F2}）");
+                sb.AppendLine(content.Trim());
+                sb.AppendLine();
+            }
+            sb.AppendLine("---");
+            sb.AppendLine();
+        }
+
+        sb.AppendLine(userGoal);
+        sb.AppendLine("\n请从第一步开始执行 Agent Loop。记住：只输出一个合法 JSON 对象。");
+        return sb.ToString();
     }
 }

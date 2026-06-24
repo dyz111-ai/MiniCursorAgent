@@ -4,59 +4,35 @@ namespace MiniCursorAgent.Memory;
 
 public sealed class RagStore
 {
-    private record Chunk(string Text, string Source, int StartLine, Dictionary<string, int> TermFreq);
+    private record Chunk(string Text, string EntryId, string EntryTitle, Dictionary<string, int> TermFreq);
 
     private readonly List<Chunk> _chunks = new();
-    private readonly object _lock = new();
 
-    public int ChunkCount
+    public int Count => _chunks.Count;
+
+    public RagStore()
     {
-        get { lock (_lock) { return _chunks.Count; } }
-    }
-
-    public void Index(string text, string source)
-    {
-        if (string.IsNullOrWhiteSpace(text)) return;
-
-        lock (_lock)
+        foreach (var entry in KnowledgeBase.Entries)
         {
-            _chunks.RemoveAll(c => string.Equals(c.Source, source, StringComparison.OrdinalIgnoreCase));
-
-            var lines = text.Split('\n');
-            const int chunkSize = 25;
-
-            for (var i = 0; i < lines.Length; i += chunkSize)
-            {
-                var chunkLines = lines.Skip(i).Take(chunkSize).ToArray();
-                var chunkText = string.Join('\n', chunkLines);
-                if (string.IsNullOrWhiteSpace(chunkText)) continue;
-
-                var tf = Tokenize(chunkText);
-                _chunks.Add(new Chunk(chunkText, source, i + 1, tf));
-            }
+            var fullText = entry.Title + "\n" + entry.Content;
+            _chunks.Add(new Chunk(entry.Content, entry.Id, entry.Title, Tokenize(fullText)));
         }
     }
 
-    public List<(string Text, string Source, int StartLine, double Score)> Search(string query, int topK = 3)
+    public List<(string Content, string Title, double Score)> Search(string query, int topK = 3)
     {
-        if (string.IsNullOrWhiteSpace(query)) return new();
+        if (string.IsNullOrWhiteSpace(query) || _chunks.Count == 0)
+            return new();
 
-        lock (_lock)
-        {
-            if (_chunks.Count == 0) return new();
+        var queryTerms = Tokenize(query);
 
-            var queryTerms = Tokenize(query);
-            var scored = _chunks
-                .Select(c => (c, score: CosineSimilarity(queryTerms, c.TermFreq)))
-                .Where(x => x.score > 0)
-                .OrderByDescending(x => x.score)
-                .Take(topK)
-                .ToList();
-
-            return scored
-                .Select(x => (x.c.Text, x.c.Source, x.c.StartLine, x.score))
-                .ToList();
-        }
+        return _chunks
+            .Select(c => (c, score: CosineSimilarity(queryTerms, c.TermFreq)))
+            .Where(x => x.score > 0.01)
+            .OrderByDescending(x => x.score)
+            .Take(topK)
+            .Select(x => (x.c.Text, x.c.EntryTitle, x.score))
+            .ToList();
     }
 
     private static Dictionary<string, int> Tokenize(string text)
@@ -108,7 +84,6 @@ public sealed class RagStore
         foreach (var freqB in b.Values)
             normB += (double)freqB * freqB;
 
-        if (normA == 0 || normB == 0) return 0;
-        return dot / (Math.Sqrt(normA) * Math.Sqrt(normB));
+        return normA == 0 || normB == 0 ? 0 : dot / (Math.Sqrt(normA) * Math.Sqrt(normB));
     }
 }
