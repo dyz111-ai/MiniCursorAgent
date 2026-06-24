@@ -13,7 +13,6 @@ public sealed class ReActAgent
     private readonly Dictionary<string, IAgentTool> _tools;
     private readonly AgentMemory _memory;
     private readonly RagStore? _ragStore;
-    private readonly AgentCoordinator? _coordinator;
     private readonly int _maxSteps;
     private readonly Action<string, AgentLogType> _log;
 
@@ -23,14 +22,12 @@ public sealed class ReActAgent
         AgentMemory memory,
         int maxSteps,
         Action<string, AgentLogType> log,
-        RagStore? ragStore = null,
-        AgentCoordinator? coordinator = null)
+        RagStore? ragStore = null)
     {
         _llm = llm;
         _tools = tools.ToDictionary(t => t.Name, StringComparer.OrdinalIgnoreCase);
         _memory = memory;
         _ragStore = ragStore;
-        _coordinator = coordinator;
         _maxSteps = maxSteps;
         _log = log;
         _memory.LogCallback = log;
@@ -38,25 +35,17 @@ public sealed class ReActAgent
 
     public async Task<string> RunAsync(string userGoal, CancellationToken cancellationToken = default)
     {
-        // 1. 并行多 Agent 预分析（有代码文件时自动触发）
-        var parallelReport = string.Empty;
-        if (_coordinator is not null && !string.IsNullOrEmpty(_memory.CurrentCode))
-        {
-            parallelReport = await _coordinator.RunParallelAnalysisAsync(
-                _memory, userGoal, _log, cancellationToken);
-        }
-
-        // 2. RAG 知识库检索
+        // 1. RAG 知识库检索
         var ragContext = _ragStore?.Search(userGoal, topK: 3);
         if (ragContext?.Count > 0)
             _log($"📚 RAG 检索到 {ragContext.Count} 条相关知识，已注入上下文。\n", AgentLogType.System);
 
-        // 3. 组装主 Agent 消息列表
+        // 2. 组装主 Agent 消息列表
         var messages = new List<ChatMessage> { new("system", BuildSystemPrompt()) };
         foreach (var item in _memory.ConversationHistory)
             messages.Add(item);
 
-        messages.Add(new ChatMessage("user", BuildTaskPrompt(userGoal, parallelReport, ragContext)));
+        messages.Add(new ChatMessage("user", BuildTaskPrompt(userGoal, ragContext)));
         _memory.AddConversation("user", userGoal);
 
         // 4. 主 Agent ReAct 循环
@@ -128,15 +117,19 @@ public sealed class ReActAgent
         return $$"""
 你是 Mini Cursor Agent 的主智能体，运行在 WPF 桌面程序中，专注于代码审查、修改和诊断。
 
-【多智能体架构说明】
-在你开始工作之前，协调者（Coordinator）已自动并行派发 4 个专业子智能体
-（安全分析、文档质量、性能分析、重构建议）对当前代码进行分析。
-你将在任务消息中看到这些子智能体的报告，可以直接参考和引用，无需重复分析。
+【多智能体协作】
+你可以调用 DelegateSubAgent 工具，将代码分析任务委托给专业子智能体并行执行。
+四个可选角色及其专长：
+- security：专注安全漏洞、注入风险、权限缺失、敏感信息泄露
+- docs：专注注释完整性、命名质量、可读性、代码复杂度指标
+- performance：专注性能瓶颈、低效写法、异步阻塞、内存分配
+- refactor：专注结构问题、代码异味、耦合度、设计模式
 
 你的核心职责：
-- 综合子智能体的分析报告，做出准确判断
-- 使用工具执行具体操作（读取文件、修改代码、构建验证等）
-- 给用户一份清晰、可操作的最终答复
+- 理解用户意图，自主判断当前任务是否需要专业子智能体辅助，以及需要哪几个
+- 对于需要深入分析的任务，优先调用相关子智能体获取专业视角，再做决策
+- 对于明确的小改动或简单问答，可直接处理而不必委托子智能体
+- 综合所有信息，使用工具完成操作，给出清晰可操作的最终答复
 
 工作格式（ReAct）：每次只输出一个合法 JSON，不要输出 Markdown 或代码围栏：
 {
@@ -151,8 +144,7 @@ public sealed class ReActAgent
 
 行为规则：
 1. 每步只调用一个工具。
-2. 子智能体报告已覆盖分析，你应直接利用；若报告不足再调用 FileReadTool/CodeReviewTool 补充。
-3. 修改代码优先用 ReplaceTextTool（小改动），整体重写用 FileWriteTool。
+2. 修改代码优先用 ReplaceTextTool（小改动），整体重写用 FileWriteTool。
 4. 修改后建议调用 BuildTool 验证（仅限 .NET 项目且用户明确要求构建时）。
 5. 最终答复用中文，涵盖：问题摘要、已执行操作、具体建议。
 6. 只使用列出的工具，不要编造工具名。
@@ -165,17 +157,9 @@ public sealed class ReActAgent
 
     private string BuildTaskPrompt(
         string userGoal,
-        string parallelReport,
         List<(string Content, string Title, double Score)>? ragContext)
     {
         var sb = new StringBuilder();
-
-        if (!string.IsNullOrWhiteSpace(parallelReport))
-        {
-            sb.AppendLine(parallelReport);
-            sb.AppendLine("---");
-            sb.AppendLine();
-        }
 
         if (ragContext?.Count > 0)
         {

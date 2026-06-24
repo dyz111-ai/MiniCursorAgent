@@ -28,6 +28,7 @@
                 <ColumnDefinition Width="1.15*" />
             </Grid.ColumnDefinitions>
 
+            <!-- 左侧：代码编辑区 -->
             <Grid Grid.Column="0">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
@@ -37,13 +38,8 @@
                 <Border Grid.Row="0" Background="#F3F4F6" Padding="10,6" BorderBrush="#DDDDDD" BorderThickness="0,0,0,1">
                     <TextBlock Text="代码编辑区" FontWeight="Bold" />
                 </Border>
-                <Border x:Name="DiffBanner"
-                        Grid.Row="1"
-                        Visibility="Collapsed"
-                        Background="#FFF8E1"
-                        Padding="10,6"
-                        BorderBrush="#F0E6B2"
-                        BorderThickness="0,0,0,1">
+                <Border x:Name="DiffBanner" Grid.Row="1" Visibility="Collapsed"
+                        Background="#FFF8E1" Padding="10,6" BorderBrush="#F0E6B2" BorderThickness="0,0,0,1">
                     <StackPanel Orientation="Horizontal">
                         <Border Background="#D9F2D9" Padding="8,3" Margin="0,0,8,0" CornerRadius="3">
                             <TextBlock Text="绿色 = 新增行" Foreground="#1B5E20" FontSize="12" />
@@ -52,78 +48,155 @@
                             <TextBlock Text="红色 = 删除行" Foreground="#B71C1C" FontSize="12" />
                         </Border>
                         <TextBlock Text="Diff 预览模式（显示本次 Agent 修改）"
-                                   VerticalAlignment="Center"
-                                   Margin="0,0,12,0"
-                                   Foreground="#6B5B00" />
-                        <Button x:Name="ExitDiffButton"
-                                Content="退出 Diff 预览"
-                                Padding="10,4"
-                                Click="ExitDiffButton_Click" />
+                                   VerticalAlignment="Center" Margin="0,0,12,0" Foreground="#6B5B00" />
+                        <Button x:Name="ExitDiffButton" Content="退出 Diff 预览"
+                                Padding="10,4" Click="ExitDiffButton_Click" />
                     </StackPanel>
                 </Border>
-                <avalon:TextEditor x:Name="CodeEditor"
-                                   Grid.Row="2"
-                                   FontFamily="Consolas"
-                                   FontSize="14"
-                                   ShowLineNumbers="True"
-                                   WordWrap="False"
+                <avalon:TextEditor x:Name="CodeEditor" Grid.Row="2"
+                                   FontFamily="Consolas" FontSize="14"
+                                   ShowLineNumbers="True" WordWrap="False"
                                    HorizontalScrollBarVisibility="Auto"
                                    VerticalScrollBarVisibility="Auto" />
             </Grid>
 
             <GridSplitter Grid.Column="1" Width="5" HorizontalAlignment="Stretch" Background="#E5E7EB" />
 
-            <Grid Grid.Column="2">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="*" />
-                    <RowDefinition Height="Auto" />
-                </Grid.RowDefinitions>
+            <!-- 右侧：TabControl（AI Agent + MCP 控制台） -->
+            <TabControl Grid.Column="2" BorderThickness="0" Background="Transparent">
 
-                <Border Grid.Row="0" Background="#F3F4F6" Padding="10,6" BorderBrush="#DDDDDD" BorderThickness="0,0,0,1">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="AI Agent 面板" FontWeight="Bold" />
-                        <TextBlock Text="  |  会显示 Thought / Action / Observation" Foreground="#555555" />
-                    </StackPanel>
-                </Border>
-
-                <RichTextBox x:Name="AgentLogTextBox"
-                             Grid.Row="1"
-                             FontFamily="Consolas"
-                             FontSize="13"
-                             VerticalScrollBarVisibility="Auto"
-                             IsReadOnly="True"
-                             Padding="10"
-                             Background="#FAFAFA"
-                             BorderThickness="0">
-                    <RichTextBox.Resources>
-                        <Style TargetType="Paragraph">
-                            <Setter Property="Margin" Value="0,1,0,2"/>
-                        </Style>
-                    </RichTextBox.Resources>
-                </RichTextBox>
-
-                <Border Grid.Row="2" BorderBrush="#DDDDDD" BorderThickness="0,1,0,0" Padding="8" Background="#FAFAFA">
+                <!-- Tab 1：AI Agent 面板 -->
+                <TabItem Header="AI Agent">
                     <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
-                        <TextBox x:Name="UserInputTextBox"
-                                 Grid.Row="0"
-                                 MinHeight="72"
-                                 AcceptsReturn="True"
-                                 TextWrapping="Wrap"
-                                 VerticalScrollBarVisibility="Auto"
-                                 Padding="8"
-                                 Text="帮我审查当前文件，并指出可以改进的地方" />
-                        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
-                            <Button x:Name="ClearLogButton" Content="清空日志" Padding="12,5" Margin="0,0,8,0" Click="ClearLogButton_Click" />
-                            <Button x:Name="SendButton" Content="发送给 Agent" Padding="16,5" Click="SendButton_Click" IsDefault="True" />
-                        </StackPanel>
+
+                        <Border Grid.Row="0" Background="#F3F4F6" Padding="10,6"
+                                BorderBrush="#DDDDDD" BorderThickness="0,0,0,1">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="AI Agent 面板" FontWeight="Bold" />
+                                <TextBlock Text="  |  Thought / Action / Observation" Foreground="#555555" />
+                            </StackPanel>
+                        </Border>
+
+                        <RichTextBox x:Name="AgentLogTextBox" Grid.Row="1"
+                                     FontFamily="Consolas" FontSize="13"
+                                     VerticalScrollBarVisibility="Auto"
+                                     IsReadOnly="True" Padding="10"
+                                     Background="#FAFAFA" BorderThickness="0">
+                            <RichTextBox.Resources>
+                                <Style TargetType="Paragraph">
+                                    <Setter Property="Margin" Value="0,1,0,2"/>
+                                </Style>
+                            </RichTextBox.Resources>
+                        </RichTextBox>
+
+                        <Border Grid.Row="2" BorderBrush="#DDDDDD" BorderThickness="0,1,0,0"
+                                Padding="8" Background="#FAFAFA">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <TextBox x:Name="UserInputTextBox" Grid.Row="0"
+                                         MinHeight="72" AcceptsReturn="True"
+                                         TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
+                                         Padding="8"
+                                         Text="帮我审查当前文件，并指出可以改进的地方" />
+                                <StackPanel Grid.Row="1" Orientation="Horizontal"
+                                            HorizontalAlignment="Right" Margin="0,8,0,0">
+                                    <Button x:Name="ClearLogButton" Content="清空日志"
+                                            Padding="12,5" Margin="0,0,8,0" Click="ClearLogButton_Click" />
+                                    <Button x:Name="SendButton" Content="发送给 Agent"
+                                            Padding="16,5" Click="SendButton_Click" IsDefault="True" />
+                                </StackPanel>
+                            </Grid>
+                        </Border>
                     </Grid>
-                </Border>
-            </Grid>
+                </TabItem>
+
+                <!-- Tab 2：MCP 控制台 -->
+                <TabItem Header="MCP 控制台" x:Name="McpTab">
+                    <Grid Background="#FAFAFA">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+
+                        <!-- 状态栏 -->
+                        <Border Grid.Row="0" Background="#F3F4F6" Padding="10,6"
+                                BorderBrush="#DDDDDD" BorderThickness="0,0,0,1">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="MCP Server：" FontWeight="Bold" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="McpStatusText"
+                                           Text="localhost:3001"
+                                           Foreground="#16A765" FontWeight="SemiBold"
+                                           VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                <Button x:Name="McpInitButton" Content="初始化连接"
+                                        Padding="8,3" Margin="0,0,6,0" Click="McpInit_Click"/>
+                                <Button x:Name="McpListToolsButton" Content="列出工具"
+                                        Padding="8,3" Click="McpListTools_Click"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- 工具调用区 -->
+                        <Border Grid.Row="1" Padding="10,8" BorderBrush="#DDDDDD" BorderThickness="0,0,0,1">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+
+                                <TextBlock Grid.Row="0" Grid.Column="0" Text="工具："
+                                           VerticalAlignment="Center" Margin="0,0,8,4"/>
+                                <ComboBox x:Name="McpToolComboBox" Grid.Row="0" Grid.Column="1"
+                                          Margin="0,0,0,4"
+                                          SelectionChanged="McpToolComboBox_SelectionChanged"/>
+
+                                <TextBlock Grid.Row="1" Grid.Column="0" Text="参数："
+                                           VerticalAlignment="Top" Margin="0,4,8,4"/>
+                                <TextBox x:Name="McpArgsTextBox" Grid.Row="1" Grid.Column="1"
+                                         MinHeight="56" MaxHeight="100"
+                                         AcceptsReturn="True" TextWrapping="Wrap"
+                                         VerticalScrollBarVisibility="Auto"
+                                         FontFamily="Consolas" FontSize="12"
+                                         Padding="6" Margin="0,4,0,4"
+                                         Text="{}" />
+
+                                <Button x:Name="McpSendButton" Grid.Row="2" Grid.Column="1"
+                                        Content="📤 发送 MCP 请求"
+                                        Padding="12,5" HorizontalAlignment="Right"
+                                        Click="McpSend_Click" Background="#1A73E8"
+                                        Foreground="White" BorderThickness="0"/>
+                            </Grid>
+                        </Border>
+
+                        <!-- 请求/响应日志 -->
+                        <RichTextBox x:Name="McpLogTextBox" Grid.Row="2"
+                                     FontFamily="Consolas" FontSize="12"
+                                     VerticalScrollBarVisibility="Auto"
+                                     IsReadOnly="True" Padding="10"
+                                     Background="#1E1E1E" Foreground="#D4D4D4"
+                                     BorderThickness="0">
+                            <RichTextBox.Resources>
+                                <Style TargetType="Paragraph">
+                                    <Setter Property="Margin" Value="0,2,0,2"/>
+                                </Style>
+                            </RichTextBox.Resources>
+                        </RichTextBox>
+                    </Grid>
+                </TabItem>
+
+            </TabControl>
         </Grid>
     </DockPanel>
 </Window>

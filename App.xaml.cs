@@ -46,6 +46,7 @@ public partial class App : Application
         services.AddSingleton<IAgentTool, FileWriteTool>();
         services.AddSingleton<IAgentTool, BuildTool>();
         services.AddSingleton<AgentCoordinator>();
+        services.AddSingleton<IAgentTool, DelegateSubAgentTool>();
 
         services.AddSingleton<McpServer>();
         services.AddSingleton<MainWindow>();

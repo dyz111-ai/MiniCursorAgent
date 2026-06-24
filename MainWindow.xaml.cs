@@ -8,7 +8,10 @@ using MiniCursorAgent.Services;
 using MiniCursorAgent.Tools;
 using System.Collections.Generic;
 using System.IO;
+using System.Net.Http;
 using System.Text;
+using System.Text.Encodings.Web;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
@@ -28,6 +31,12 @@ public partial class MainWindow : Window
     private string? _diffActualContent;
     private bool _isRunning;
 
+    // MCP console
+    private readonly HttpClient _mcpHttpClient = new() { Timeout = TimeSpan.FromSeconds(30) };
+    private static readonly string McpUrl = $"http://localhost:{McpServer.Port}/mcp/";
+    private int _mcpRequestId;
+    private readonly List<McpToolEntry> _mcpTools = [];
+
     // Streaming: tokens are buffered here from the background HTTP-read thread,
     // then flushed to the UI in batches every 40ms by _streamTimer.
     private readonly StringBuilder _streamBuffer = new();
@@ -42,7 +51,6 @@ public partial class MainWindow : Window
         IEnumerable<IAgentTool> tools,
         AgentMemory memory,
         RagStore ragStore,
-        AgentCoordinator coordinator,
         ILogger<MainWindow> logger)
     {
         InitializeComponent();
@@ -51,7 +59,7 @@ public partial class MainWindow : Window
         _ragStore = ragStore;
         _logger = logger;
         _diffHighlighter = new EditorDiffHighlighter(CodeEditor);
-        _agent = new ReActAgent(client, tools, memory, settings.AgentMaxSteps, AppendAgentLog, ragStore, coordinator);
+        _agent = new ReActAgent(client, tools, memory, settings.AgentMaxSteps, AppendAgentLog, ragStore);
 
         _streamTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher)
         {
@@ -415,5 +423,257 @@ public partial class MainWindow : Window
             AgentLogType.Streaming => (new SolidColorBrush(Color.FromRgb(0x99, 0x99, 0x99)), FontWeights.Normal, 11.5),
             _ => (new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x33)), FontWeights.Normal, 13),
         };
+    }
+
+    // ── MCP 控制台 ──────────────────────────────────────────────────────────
+
+    private async void McpInit_Click(object sender, RoutedEventArgs e)
+    {
+        McpInitButton.IsEnabled = false;
+        AppendMcpLog("► 发送 initialize...\n", McpLogColor.Label);
+
+        var request = new
+        {
+            jsonrpc = "2.0",
+            id = ++_mcpRequestId,
+            method = "initialize",
+            @params = new
+            {
+                protocolVersion = "2024-11-05",
+                capabilities = new { },
+                clientInfo = new { name = "MiniCursorAgent-UI", version = "1.0" }
+            }
+        };
+
+        try
+        {
+            var (reqJson, respJson) = await PostMcpAsync(request);
+            AppendMcpLog("→ Request:\n", McpLogColor.Label);
+            AppendMcpLog(reqJson + "\n", McpLogColor.Request);
+            AppendMcpLog("← Response:\n", McpLogColor.Label);
+            AppendMcpLog(respJson + "\n", McpLogColor.Response);
+
+            using var doc = JsonDocument.Parse(respJson);
+            if (doc.RootElement.TryGetProperty("result", out var result) &&
+                result.TryGetProperty("serverInfo", out var info))
+            {
+                var name = info.TryGetProperty("name", out var n) ? n.GetString() : "?";
+                var ver = info.TryGetProperty("version", out var v) ? v.GetString() : "?";
+                McpStatusText.Text = $"localhost:{McpServer.Port}  ✓ {name} v{ver}";
+                McpStatusText.Foreground = new SolidColorBrush(Color.FromRgb(0x16, 0xA7, 0x65));
+            }
+        }
+        catch (Exception ex)
+        {
+            AppendMcpLog("✗ " + ex.Message + "\n", McpLogColor.Error);
+            McpStatusText.Text = "连接失败";
+            McpStatusText.Foreground = new SolidColorBrush(Color.FromRgb(0xD9, 0x30, 0x25));
+        }
+        finally
+        {
+            McpInitButton.IsEnabled = true;
+        }
+    }
+
+    private async void McpListTools_Click(object sender, RoutedEventArgs e)
+    {
+        McpListToolsButton.IsEnabled = false;
+        AppendMcpLog("► 发送 tools/list...\n", McpLogColor.Label);
+
+        var request = new
+        {
+            jsonrpc = "2.0",
+            id = ++_mcpRequestId,
+            method = "tools/list",
+            @params = new { }
+        };
+
+        try
+        {
+            var (reqJson, respJson) = await PostMcpAsync(request);
+            AppendMcpLog("→ Request:\n", McpLogColor.Label);
+            AppendMcpLog(reqJson + "\n", McpLogColor.Request);
+            AppendMcpLog("← Response:\n", McpLogColor.Label);
+            AppendMcpLog(respJson + "\n", McpLogColor.Response);
+
+            using var doc = JsonDocument.Parse(respJson);
+            if (doc.RootElement.TryGetProperty("result", out var result) &&
+                result.TryGetProperty("tools", out var toolsArr) &&
+                toolsArr.ValueKind == JsonValueKind.Array)
+            {
+                _mcpTools.Clear();
+                foreach (var t in toolsArr.EnumerateArray())
+                {
+                    var name = t.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+                    var desc = t.TryGetProperty("description", out var d) ? d.GetString() ?? "" : "";
+                    _mcpTools.Add(new McpToolEntry(name, desc));
+                }
+
+                McpToolComboBox.ItemsSource = null;
+                McpToolComboBox.ItemsSource = _mcpTools;
+                McpToolComboBox.DisplayMemberPath = "Display";
+                if (_mcpTools.Count > 0) McpToolComboBox.SelectedIndex = 0;
+
+                AppendMcpLog($"✓ 已加载 {_mcpTools.Count} 个工具\n", McpLogColor.Label);
+            }
+        }
+        catch (Exception ex)
+        {
+            AppendMcpLog("✗ " + ex.Message + "\n", McpLogColor.Error);
+        }
+        finally
+        {
+            McpListToolsButton.IsEnabled = true;
+        }
+    }
+
+    private void McpToolComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (McpToolComboBox.SelectedItem is not McpToolEntry entry) return;
+
+        McpArgsTextBox.Text = entry.Name switch
+        {
+            // path 可选，不填则读当前文件
+            "FileReadTool" => "{}",
+
+            // path 可选，不填则写当前文件；content 必填
+            "FileWriteTool" => """
+                {
+                  "path": "",
+                  "content": ""
+                }
+                """.Trim(),
+
+            // oldText/newText 必填；replaceAll 可选（默认 false）
+            "ReplaceTextTool" => """
+                {
+                  "oldText": "",
+                  "newText": "",
+                  "replaceAll": false
+                }
+                """.Trim(),
+
+            // path 可选，不填则从当前文件向上查找 .csproj
+            "BuildTool" => "{}",
+
+            "CodeReviewTool" or "CodeMetricsTool" => "{}",
+
+            // roles 可选，不填则派发全部 4 个角色
+            "DelegateSubAgent" => """
+                {
+                  "roles": ["security", "docs", "performance", "refactor"]
+                }
+                """.Trim(),
+
+            _ => "{}"
+        };
+    }
+
+    private async void McpSend_Click(object sender, RoutedEventArgs e)
+    {
+        if (McpToolComboBox.SelectedItem is not McpToolEntry entry)
+        {
+            AppendMcpLog("✗ 请先列出工具并选择一个\n", McpLogColor.Error);
+            return;
+        }
+
+        JsonElement argsElement;
+        try
+        {
+            using var argsDoc = JsonDocument.Parse(McpArgsTextBox.Text.Trim());
+            argsElement = argsDoc.RootElement.Clone();
+        }
+        catch
+        {
+            AppendMcpLog("✗ 参数不是合法 JSON，请检查格式\n", McpLogColor.Error);
+            return;
+        }
+
+        McpSendButton.IsEnabled = false;
+        AppendMcpLog($"► 调用工具：{entry.Name}\n", McpLogColor.Label);
+
+        var request = new
+        {
+            jsonrpc = "2.0",
+            id = ++_mcpRequestId,
+            method = "tools/call",
+            @params = new
+            {
+                name = entry.Name,
+                arguments = argsElement
+            }
+        };
+
+        try
+        {
+            var (reqJson, respJson) = await PostMcpAsync(request);
+            AppendMcpLog("→ Request:\n", McpLogColor.Label);
+            AppendMcpLog(reqJson + "\n", McpLogColor.Request);
+            AppendMcpLog("← Response:\n", McpLogColor.Label);
+            AppendMcpLog(respJson + "\n\n", McpLogColor.Response);
+        }
+        catch (Exception ex)
+        {
+            AppendMcpLog("✗ " + ex.Message + "\n", McpLogColor.Error);
+        }
+        finally
+        {
+            McpSendButton.IsEnabled = true;
+        }
+    }
+
+    private static readonly JsonSerializerOptions _jsonDisplay = new()
+    {
+        WriteIndented = true,
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
+
+    private async Task<(string ReqJson, string RespJson)> PostMcpAsync(object request)
+    {
+        var reqJson = JsonSerializer.Serialize(request, _jsonDisplay);
+        var content = new StringContent(reqJson, Encoding.UTF8, "application/json");
+        using var response = await _mcpHttpClient.PostAsync(McpUrl, content).ConfigureAwait(false);
+        var rawResp = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+
+        string prettyResp;
+        try
+        {
+            using var doc = JsonDocument.Parse(rawResp);
+            prettyResp = JsonSerializer.Serialize(doc, _jsonDisplay);
+        }
+        catch
+        {
+            prettyResp = rawResp;
+        }
+
+        return (reqJson, prettyResp);
+    }
+
+    private void AppendMcpLog(string text, McpLogColor color)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            var brush = color switch
+            {
+                McpLogColor.Label => new SolidColorBrush(Color.FromRgb(0x9C, 0xDC, 0xFE)),
+                McpLogColor.Request => new SolidColorBrush(Color.FromRgb(0xCE, 0x91, 0x78)),
+                McpLogColor.Response => new SolidColorBrush(Color.FromRgb(0xB5, 0xCE, 0xA8)),
+                McpLogColor.Error => new SolidColorBrush(Color.FromRgb(0xF4, 0x47, 0x47)),
+                _ => new SolidColorBrush(Color.FromRgb(0xD4, 0xD4, 0xD4))
+            };
+
+            var para = new Paragraph { Margin = new Thickness(0, 2, 0, 2) };
+            para.Inlines.Add(new Run(text) { Foreground = brush });
+            McpLogTextBox.Document.Blocks.Add(para);
+            McpLogTextBox.CaretPosition = McpLogTextBox.Document.ContentEnd;
+            FindScrollViewer(McpLogTextBox)?.ScrollToEnd();
+        });
+    }
+
+    private enum McpLogColor { Default, Label, Request, Response, Error }
+
+    private sealed record McpToolEntry(string Name, string Description)
+    {
+        public string Display => $"{Name}  —  {Description}";
     }
 }

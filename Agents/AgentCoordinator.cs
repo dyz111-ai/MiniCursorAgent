@@ -24,24 +24,33 @@ public sealed class AgentCoordinator
         _readOnlyTools = allTools.Where(t => ReadOnlyToolNames.Contains(t.Name)).ToList();
     }
 
+    public static IReadOnlyList<string> AllRoles => Roles;
+
     /// <summary>
-    /// 并行启动所有专业子智能体，返回汇总分析报告。
+    /// 并行启动指定专业子智能体，返回汇总分析报告。roles 为 null 时启动全部。
     /// </summary>
     public async Task<string> RunParallelAnalysisAsync(
         AgentMemory memory,
-        string userTask,
+        string? userTask,
         Action<string, AgentLogType> log,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IReadOnlyList<string>? roles = null)
     {
         if (string.IsNullOrWhiteSpace(memory.CurrentCode))
             return string.Empty;
 
-        log($"🤝 协调者：并行启动 {Roles.Length} 个专业子智能体...\n", AgentLogType.Step);
+        var activeRoles = roles?.Count > 0
+            ? Roles.Where(r => roles.Contains(r, StringComparer.OrdinalIgnoreCase)).ToArray()
+            : Roles;
 
-        var subAgentTasks = Roles.Select(role =>
+        if (activeRoles.Length == 0) return string.Empty;
+
+        log($"🤝 协调者：并行启动 {activeRoles.Length} 个专业子智能体...\n", AgentLogType.Step);
+
+        var subAgentTasks = activeRoles.Select(role =>
         {
             var agent = new SubAgent(role, _llm, _readOnlyTools, memory, log, maxSteps: 3);
-            return (role: agent.DisplayName, resultTask: agent.RunAsync(userTask, cancellationToken));
+            return (role: agent.DisplayName, resultTask: agent.RunAsync(userTask ?? string.Empty, cancellationToken));
         }).ToList();
 
         string[] results;
@@ -58,7 +67,7 @@ public sealed class AgentCoordinator
 
         var sb = new StringBuilder();
         sb.AppendLine("【多 Agent 并行分析报告】");
-        sb.AppendLine($"（{Roles.Length} 个专业子智能体已并行完成分析）");
+        sb.AppendLine($"（{activeRoles.Length} 个专业子智能体已并行完成分析）");
         sb.AppendLine();
 
         for (var i = 0; i < subAgentTasks.Count; i++)
