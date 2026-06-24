@@ -1,5 +1,5 @@
 using ICSharpCode.AvalonEdit.Highlighting;
-using Microsoft.Win32;
+using Microsoft.Extensions.Logging;
 using MiniCursorAgent.Agents;
 using MiniCursorAgent.LLM;
 using MiniCursorAgent.Memory;
@@ -18,31 +18,27 @@ namespace MiniCursorAgent;
 
 public partial class MainWindow : Window
 {
-    private readonly AgentMemory _memory = new();
+    private readonly AgentMemory _memory;
     private readonly ReActAgent _agent;
     private readonly EditorDiffHighlighter _diffHighlighter;
+    private readonly ILogger<MainWindow> _logger;
     private string? _currentFilePath;
     private string? _diffActualContent;
     private bool _isRunning;
 
-    public MainWindow()
+    public MainWindow(
+        AppSettings settings,
+        DeepSeekClient client,
+        IEnumerable<IAgentTool> tools,
+        AgentMemory memory,
+        ILogger<MainWindow> logger)
     {
         InitializeComponent();
+
+        _memory = memory;
+        _logger = logger;
         _diffHighlighter = new EditorDiffHighlighter(CodeEditor);
-
-        var settings = AppSettings.Load();
-        var client = new DeepSeekClient(settings);
-        var tools = new IAgentTool[]
-        {
-            new FileReadTool(),
-            new CodeReviewTool(),
-            new CodeMetricsTool(),
-            new ReplaceTextTool(),
-            new FileWriteTool(),
-            new BuildTool()
-        };
-
-        _agent = new ReActAgent(client, tools, _memory, settings.AgentMaxSteps, AppendAgentLog);
+        _agent = new ReActAgent(client, tools, memory, settings.AgentMaxSteps, AppendAgentLog);
 
         AppendAgentLog("Mini Cursor Agent 已启动。\n", AgentLogType.System);
         AppendAgentLog("使用前请先打开一个代码/文本文件，然后在右侧输入任务。\n", AgentLogType.System);
@@ -55,7 +51,7 @@ public partial class MainWindow : Window
 
     private async void OpenButton_Click(object sender, RoutedEventArgs e)
     {
-        var dialog = new OpenFileDialog
+        var dialog = new Microsoft.Win32.OpenFileDialog
         {
             Title = "选择一个代码或文本文件",
             Filter = CodeFileHelper.OpenFileDialogFilter,
@@ -87,10 +83,12 @@ public partial class MainWindow : Window
             _memory.CurrentCode = code;
             _memory.LastWritePath = null;
 
+            _logger.LogInformation("已打开文件：{FilePath}", filePath);
             AppendAgentLog($"📂 已打开文件：{filePath}\n", AgentLogType.System);
         }
         catch (Exception ex)
         {
+            _logger.LogError(ex, "打开文件失败：{FilePath}", filePath);
             MessageBox.Show($"打开文件失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
@@ -123,10 +121,12 @@ public partial class MainWindow : Window
                 CodeEditor.Text = content;
             }
 
+            _logger.LogInformation("已保存文件：{FilePath}", _currentFilePath);
             AppendAgentLog($"💾 已保存文件：{_currentFilePath}\n", AgentLogType.System);
         }
         catch (Exception ex)
         {
+            _logger.LogError(ex, "保存文件失败：{FilePath}", _currentFilePath);
             MessageBox.Show($"保存失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
@@ -178,7 +178,10 @@ public partial class MainWindow : Window
             AppendAgentLog($"👤 User: {userGoal}\n", AgentLogType.User);
             AppendAgentLog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", AgentLogType.Divider);
 
+            _logger.LogInformation("开始执行 Agent 任务：{Goal}", userGoal);
             var finalAnswer = await _agent.RunAsync(userGoal);
+            _logger.LogInformation("Agent 任务完成");
+
             AppendAgentLog("\n", AgentLogType.Info);
             AppendAgentLog("✅ Final Answer:\n", AgentLogType.FinalAnswer);
             AppendFormattedFinalAnswer(finalAnswer);
@@ -194,6 +197,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            _logger.LogError(ex, "Agent 运行失败");
             AppendAgentLog($"❌ 运行失败：{ex.Message}\n", AgentLogType.Error);
             MessageBox.Show($"Agent 运行失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
         }

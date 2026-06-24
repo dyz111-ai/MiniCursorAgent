@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using MiniCursorAgent.Models;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -12,11 +13,13 @@ public sealed class DeepSeekClient
     private readonly HttpClient _httpClient = new();
     private readonly string _model;
     private readonly string _apiKey;
+    private readonly ILogger<DeepSeekClient> _logger;
 
-    public DeepSeekClient(AppSettings settings)
+    public DeepSeekClient(AppSettings settings, ILogger<DeepSeekClient> logger)
     {
         _apiKey = settings.DeepSeekApiKey;
         _model = settings.DeepSeekModel;
+        _logger = logger;
         _httpClient.BaseAddress = new Uri(settings.DeepSeekBaseUrl.TrimEnd('/') + "/");
         _httpClient.Timeout = TimeSpan.FromSeconds(90);
     }
@@ -28,13 +31,16 @@ public sealed class DeepSeekClient
             throw new InvalidOperationException("缺少 DeepSeek API Key。请设置环境变量 DEEPSEEK_API_KEY，或在 appsettings.json 中填写 DeepSeek:ApiKey。");
         }
 
+        var messageList = messages.ToList();
+        _logger.LogDebug("向 DeepSeek API 发送请求 (model={Model}, messages={Count})", _model, messageList.Count);
+
         using var request = new HttpRequestMessage(HttpMethod.Post, "chat/completions");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
 
         var payload = new
         {
             model = _model,
-            messages = messages.Select(m => new { role = m.Role, content = m.Content }).ToArray(),
+            messages = messageList.Select(m => new { role = m.Role, content = m.Content }).ToArray(),
             temperature = 0.2,
             max_tokens = 4096
         };
@@ -51,6 +57,7 @@ public sealed class DeepSeekClient
 
         if (!response.IsSuccessStatusCode)
         {
+            _logger.LogError("DeepSeek API 请求失败：{StatusCode} {Reason}", (int)response.StatusCode, response.ReasonPhrase);
             throw new InvalidOperationException($"DeepSeek API 请求失败：{(int)response.StatusCode} {response.ReasonPhrase}\n{responseText}");
         }
 
@@ -63,7 +70,9 @@ public sealed class DeepSeekClient
             choices[0].TryGetProperty("message", out var message) &&
             message.TryGetProperty("content", out var content))
         {
-            return content.GetString() ?? string.Empty;
+            var result = content.GetString() ?? string.Empty;
+            _logger.LogDebug("DeepSeek API 响应成功，返回 {Length} 字符", result.Length);
+            return result;
         }
 
         throw new InvalidOperationException("DeepSeek API 返回格式异常：" + responseText);
