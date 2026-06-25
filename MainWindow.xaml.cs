@@ -430,8 +430,6 @@ public partial class MainWindow : Window
     private async void McpInit_Click(object sender, RoutedEventArgs e)
     {
         McpInitButton.IsEnabled = false;
-        AppendMcpLog("► 发送 initialize...\n", McpLogColor.Label);
-
         var request = new
         {
             jsonrpc = "2.0",
@@ -448,13 +446,11 @@ public partial class MainWindow : Window
         try
         {
             var (reqJson, respJson) = await PostMcpAsync(request);
-            AppendMcpLog("→ Request:\n", McpLogColor.Label);
-            AppendMcpLog(reqJson + "\n", McpLogColor.Request);
-            AppendMcpLog("← Response:\n", McpLogColor.Label);
-            AppendMcpLog(respJson + "\n", McpLogColor.Response);
-
             using var doc = JsonDocument.Parse(respJson);
-            if (doc.RootElement.TryGetProperty("result", out var result) &&
+            var success = !doc.RootElement.TryGetProperty("error", out _);
+            AddMcpCard("initialize", success, reqJson, respJson);
+
+            if (success && doc.RootElement.TryGetProperty("result", out var result) &&
                 result.TryGetProperty("serverInfo", out var info))
             {
                 var name = info.TryGetProperty("name", out var n) ? n.GetString() : "?";
@@ -462,10 +458,16 @@ public partial class MainWindow : Window
                 McpStatusText.Text = $"localhost:{McpServer.Port}  ✓ {name} v{ver}";
                 McpStatusText.Foreground = new SolidColorBrush(Color.FromRgb(0x16, 0xA7, 0x65));
             }
+            else if (!success)
+            {
+                McpStatusText.Text = "连接失败";
+                McpStatusText.Foreground = new SolidColorBrush(Color.FromRgb(0xD9, 0x30, 0x25));
+            }
         }
         catch (Exception ex)
         {
-            AppendMcpLog("✗ " + ex.Message + "\n", McpLogColor.Error);
+            var errResp = JsonSerializer.Serialize(new { error = new { message = ex.Message } }, _jsonDisplay);
+            AddMcpCard("initialize", false, JsonSerializer.Serialize(request, _jsonDisplay), errResp);
             McpStatusText.Text = "连接失败";
             McpStatusText.Foreground = new SolidColorBrush(Color.FromRgb(0xD9, 0x30, 0x25));
         }
@@ -478,8 +480,6 @@ public partial class MainWindow : Window
     private async void McpListTools_Click(object sender, RoutedEventArgs e)
     {
         McpListToolsButton.IsEnabled = false;
-        AppendMcpLog("► 发送 tools/list...\n", McpLogColor.Label);
-
         var request = new
         {
             jsonrpc = "2.0",
@@ -491,13 +491,11 @@ public partial class MainWindow : Window
         try
         {
             var (reqJson, respJson) = await PostMcpAsync(request);
-            AppendMcpLog("→ Request:\n", McpLogColor.Label);
-            AppendMcpLog(reqJson + "\n", McpLogColor.Request);
-            AppendMcpLog("← Response:\n", McpLogColor.Label);
-            AppendMcpLog(respJson + "\n", McpLogColor.Response);
-
             using var doc = JsonDocument.Parse(respJson);
-            if (doc.RootElement.TryGetProperty("result", out var result) &&
+            var success = !doc.RootElement.TryGetProperty("error", out _);
+            AddMcpCard("tools/list", success, reqJson, respJson);
+
+            if (success && doc.RootElement.TryGetProperty("result", out var result) &&
                 result.TryGetProperty("tools", out var toolsArr) &&
                 toolsArr.ValueKind == JsonValueKind.Array)
             {
@@ -508,18 +506,16 @@ public partial class MainWindow : Window
                     var desc = t.TryGetProperty("description", out var d) ? d.GetString() ?? "" : "";
                     _mcpTools.Add(new McpToolEntry(name, desc));
                 }
-
                 McpToolComboBox.ItemsSource = null;
                 McpToolComboBox.ItemsSource = _mcpTools;
                 McpToolComboBox.DisplayMemberPath = "Display";
                 if (_mcpTools.Count > 0) McpToolComboBox.SelectedIndex = 0;
-
-                AppendMcpLog($"✓ 已加载 {_mcpTools.Count} 个工具\n", McpLogColor.Label);
             }
         }
         catch (Exception ex)
         {
-            AppendMcpLog("✗ " + ex.Message + "\n", McpLogColor.Error);
+            var errResp = JsonSerializer.Serialize(new { error = new { message = ex.Message } }, _jsonDisplay);
+            AddMcpCard("tools/list", false, JsonSerializer.Serialize(request, _jsonDisplay), errResp);
         }
         finally
         {
@@ -573,7 +569,7 @@ public partial class MainWindow : Window
     {
         if (McpToolComboBox.SelectedItem is not McpToolEntry entry)
         {
-            AppendMcpLog("✗ 请先列出工具并选择一个\n", McpLogColor.Error);
+            MessageBox.Show("请先列出工具并选择一个", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
@@ -585,41 +581,42 @@ public partial class MainWindow : Window
         }
         catch
         {
-            AppendMcpLog("✗ 参数不是合法 JSON，请检查格式\n", McpLogColor.Error);
+            MessageBox.Show("参数不是合法 JSON，请检查格式", "格式错误", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 
         McpSendButton.IsEnabled = false;
-        AppendMcpLog($"► 调用工具：{entry.Name}\n", McpLogColor.Label);
-
         var request = new
         {
             jsonrpc = "2.0",
             id = ++_mcpRequestId,
             method = "tools/call",
-            @params = new
-            {
-                name = entry.Name,
-                arguments = argsElement
-            }
+            @params = new { name = entry.Name, arguments = argsElement }
         };
 
         try
         {
             var (reqJson, respJson) = await PostMcpAsync(request);
-            AppendMcpLog("→ Request:\n", McpLogColor.Label);
-            AppendMcpLog(reqJson + "\n", McpLogColor.Request);
-            AppendMcpLog("← Response:\n", McpLogColor.Label);
-            AppendMcpLog(respJson + "\n\n", McpLogColor.Response);
+            using var doc = JsonDocument.Parse(respJson);
+            var success = !doc.RootElement.TryGetProperty("error", out _) &&
+                          !(doc.RootElement.TryGetProperty("result", out var res) &&
+                            res.TryGetProperty("isError", out var ie) && ie.GetBoolean());
+            AddMcpCard(entry.Name, success, reqJson, respJson);
         }
         catch (Exception ex)
         {
-            AppendMcpLog("✗ " + ex.Message + "\n", McpLogColor.Error);
+            var errResp = JsonSerializer.Serialize(new { error = new { message = ex.Message } }, _jsonDisplay);
+            AddMcpCard(entry.Name, false, JsonSerializer.Serialize(request, _jsonDisplay), errResp);
         }
         finally
         {
             McpSendButton.IsEnabled = true;
         }
+    }
+
+    private void McpClear_Click(object sender, RoutedEventArgs e)
+    {
+        McpCardPanel.Children.Clear();
     }
 
     private static readonly JsonSerializerOptions _jsonDisplay = new()
@@ -649,28 +646,235 @@ public partial class MainWindow : Window
         return (reqJson, prettyResp);
     }
 
-    private void AppendMcpLog(string text, McpLogColor color)
+    private void AddMcpCard(string title, bool success, string reqJson, string respJson)
     {
         Dispatcher.Invoke(() =>
         {
-            var brush = color switch
-            {
-                McpLogColor.Label => new SolidColorBrush(Color.FromRgb(0x9C, 0xDC, 0xFE)),
-                McpLogColor.Request => new SolidColorBrush(Color.FromRgb(0xCE, 0x91, 0x78)),
-                McpLogColor.Response => new SolidColorBrush(Color.FromRgb(0xB5, 0xCE, 0xA8)),
-                McpLogColor.Error => new SolidColorBrush(Color.FromRgb(0xF4, 0x47, 0x47)),
-                _ => new SolidColorBrush(Color.FromRgb(0xD4, 0xD4, 0xD4))
-            };
-
-            var para = new Paragraph { Margin = new Thickness(0, 2, 0, 2) };
-            para.Inlines.Add(new Run(text) { Foreground = brush });
-            McpLogTextBox.Document.Blocks.Add(para);
-            McpLogTextBox.CaretPosition = McpLogTextBox.Document.ContentEnd;
-            FindScrollViewer(McpLogTextBox)?.ScrollToEnd();
+            McpCardPanel.Children.Add(BuildMcpCard(title, success, reqJson, respJson));
+            McpCardScrollViewer.ScrollToEnd();
         });
     }
 
-    private enum McpLogColor { Default, Label, Request, Response, Error }
+    private static UIElement BuildMcpCard(string title, bool success, string reqJson, string respJson)
+    {
+        var headerColor = success ? Color.FromRgb(0x1A, 0x73, 0xE8) : Color.FromRgb(0xD9, 0x30, 0x25);
+
+        // ── 卡片外框 ──
+        var card = new Border
+        {
+            Background = Brushes.White,
+            BorderBrush = new SolidColorBrush(Color.FromRgb(0xE0, 0xE0, 0xE0)),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            Margin = new Thickness(0, 0, 0, 10)
+        };
+
+        var outerStack = new StackPanel();
+
+        // ── 标题栏 ──
+        var header = new Border
+        {
+            Background = new SolidColorBrush(headerColor),
+            Padding = new Thickness(12, 8, 12, 8),
+            CornerRadius = new CornerRadius(5, 5, 0, 0)
+        };
+        var headerGrid = new Grid();
+        headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        headerGrid.Children.Add(new TextBlock
+        {
+            Text = $"⚙  {title}",
+            Foreground = Brushes.White,
+            FontWeight = FontWeights.Bold,
+            FontSize = 13,
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        var meta = new TextBlock
+        {
+            Text = $"{(success ? "✓ 成功" : "✗ 失败")}    {DateTime.Now:HH:mm:ss}",
+            Foreground = new SolidColorBrush(Color.FromArgb(200, 255, 255, 255)),
+            FontSize = 12,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        Grid.SetColumn(meta, 1);
+        headerGrid.Children.Add(meta);
+        header.Child = headerGrid;
+
+        // ── 内容区（参数 | 分割线 | 结果）──
+        var contentGrid = new Grid();
+        contentGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        contentGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        contentGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(2, GridUnitType.Star) });
+
+        contentGrid.Children.Add(MakeContentPanel("参数", FormatMcpParams(reqJson),
+            new FontFamily("Consolas"), 12, Color.FromRgb(0x44, 0x44, 0x44),
+            new Thickness(12, 10, 8, 10)));
+
+        var divider = new Border
+        {
+            Width = 1,
+            Background = new SolidColorBrush(Color.FromRgb(0xE8, 0xE8, 0xE8)),
+            Margin = new Thickness(0, 8, 0, 8)
+        };
+        Grid.SetColumn(divider, 1);
+        contentGrid.Children.Add(divider);
+
+        var resultPanel = MakeContentPanel("结果", FormatMcpResult(respJson),
+            new FontFamily("Segoe UI"), 13, Color.FromRgb(0x1A, 0x1A, 0x1A),
+            new Thickness(8, 10, 12, 10));
+        Grid.SetColumn(resultPanel, 2);
+        contentGrid.Children.Add(resultPanel);
+
+        // ── 分割线 + 折叠原始 JSON ──
+        var sep = new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(0xEE, 0xEE, 0xEE)) };
+
+        var expander = new Expander
+        {
+            Header = "原始 JSON",
+            Margin = new Thickness(8, 2, 8, 6),
+            FontSize = 11,
+            Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88))
+        };
+        var rawStack = new StackPanel { Margin = new Thickness(0, 6, 0, 0) };
+        rawStack.Children.Add(MakeRawLabel("Request", Color.FromRgb(0xCE, 0x91, 0x78)));
+        rawStack.Children.Add(MakeRawBox(reqJson));
+        rawStack.Children.Add(MakeRawLabel("Response", Color.FromRgb(0x4C, 0xAF, 0x50)));
+        rawStack.Children.Add(MakeRawBox(respJson));
+        expander.Content = rawStack;
+
+        outerStack.Children.Add(header);
+        outerStack.Children.Add(contentGrid);
+        outerStack.Children.Add(sep);
+        outerStack.Children.Add(expander);
+        card.Child = outerStack;
+        return card;
+    }
+
+    private static StackPanel MakeContentPanel(string label, string text,
+        FontFamily font, double fontSize, Color textColor, Thickness margin)
+    {
+        var panel = new StackPanel { Margin = margin };
+        panel.Children.Add(new TextBlock
+        {
+            Text = label,
+            FontSize = 10,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = new SolidColorBrush(Color.FromRgb(0x99, 0x99, 0x99)),
+            Margin = new Thickness(0, 0, 0, 4)
+        });
+        panel.Children.Add(new TextBlock
+        {
+            Text = text,
+            FontFamily = font,
+            FontSize = fontSize,
+            Foreground = new SolidColorBrush(textColor),
+            TextWrapping = TextWrapping.Wrap
+        });
+        return panel;
+    }
+
+    private static TextBlock MakeRawLabel(string text, Color color) => new()
+    {
+        Text = text,
+        FontSize = 11,
+        FontWeight = FontWeights.SemiBold,
+        Foreground = new SolidColorBrush(color),
+        Margin = new Thickness(0, 0, 0, 2)
+    };
+
+    private static Border MakeRawBox(string json) => new()
+    {
+        Background = new SolidColorBrush(Color.FromRgb(0xFB, 0xFB, 0xFB)),
+        BorderBrush = new SolidColorBrush(Color.FromRgb(0xE0, 0xE0, 0xE0)),
+        BorderThickness = new Thickness(1),
+        Padding = new Thickness(8),
+        Margin = new Thickness(0, 0, 0, 8),
+        Child = new TextBox
+        {
+            Text = json,
+            FontFamily = new FontFamily("Consolas"),
+            FontSize = 11,
+            IsReadOnly = true,
+            TextWrapping = TextWrapping.Wrap,
+            BorderThickness = new Thickness(0),
+            Background = Brushes.Transparent,
+            Foreground = new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x33))
+        }
+    };
+
+    private static string FormatMcpParams(string reqJson)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(reqJson);
+            var root = doc.RootElement;
+            var method = root.TryGetProperty("method", out var m) ? m.GetString() : "";
+
+            if (method == "tools/call" &&
+                root.TryGetProperty("params", out var p) &&
+                p.TryGetProperty("arguments", out var args) &&
+                args.ValueKind == JsonValueKind.Object)
+            {
+                var pairs = args.EnumerateObject().ToList();
+                if (pairs.Count == 0) return "(无参数)";
+                return string.Join("\n", pairs.Select(kv =>
+                {
+                    var val = kv.Value.ToString();
+                    return $"{kv.Name}: {(val.Length > 60 ? val[..57] + "…" : val)}";
+                }));
+            }
+            if (method == "initialize") return "protocolVersion: 2024-11-05\nclientInfo: MiniCursorAgent-UI";
+            return "(无参数)";
+        }
+        catch { return "(解析失败)"; }
+    }
+
+    private static string FormatMcpResult(string respJson)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(respJson);
+            var root = doc.RootElement;
+
+            if (root.TryGetProperty("error", out var err))
+            {
+                var msg = err.TryGetProperty("message", out var em) ? em.GetString() : "未知错误";
+                return $"错误：{msg}";
+            }
+
+            if (!root.TryGetProperty("result", out var result)) return "(无结果)";
+
+            // tools/call
+            if (result.TryGetProperty("content", out var content) &&
+                content.ValueKind == JsonValueKind.Array && content.GetArrayLength() > 0)
+            {
+                var text = content[0].TryGetProperty("text", out var t) ? t.GetString() ?? "" : "";
+                return text.Length > 300 ? text[..297] + "…" : text;
+            }
+
+            // initialize
+            if (result.TryGetProperty("serverInfo", out var info))
+            {
+                var sName = info.TryGetProperty("name", out var n) ? n.GetString() : "?";
+                var sVer = info.TryGetProperty("version", out var v) ? v.GetString() : "?";
+                var proto = result.TryGetProperty("protocolVersion", out var pv) ? pv.GetString() : "?";
+                return $"服务器：{sName} v{sVer}\n协议版本：{proto}";
+            }
+
+            // tools/list
+            if (result.TryGetProperty("tools", out var tools) && tools.ValueKind == JsonValueKind.Array)
+            {
+                var names = tools.EnumerateArray()
+                    .Select(t => t.TryGetProperty("name", out var tn) ? tn.GetString() : "?")
+                    .ToList();
+                return $"共 {names.Count} 个工具\n{string.Join(" · ", names)}";
+            }
+
+            return "(无结果)";
+        }
+        catch { return "(解析失败)"; }
+    }
 
     private sealed record McpToolEntry(string Name, string Description)
     {

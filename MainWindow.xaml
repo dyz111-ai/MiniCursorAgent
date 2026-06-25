@@ -130,17 +130,21 @@
                         <!-- 状态栏 -->
                         <Border Grid.Row="0" Background="#F3F4F6" Padding="10,6"
                                 BorderBrush="#DDDDDD" BorderThickness="0,0,0,1">
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="MCP Server：" FontWeight="Bold" VerticalAlignment="Center"/>
+                            <DockPanel LastChildFill="True">
+                                <TextBlock DockPanel.Dock="Left" Text="MCP Server："
+                                           FontWeight="Bold" VerticalAlignment="Center"/>
+                                <Button DockPanel.Dock="Right" x:Name="McpClearButton" Content="清空记录"
+                                        Padding="8,3" Margin="6,0,0,0" Click="McpClear_Click"/>
+                                <Button DockPanel.Dock="Right" x:Name="McpListToolsButton" Content="列出工具"
+                                        Padding="8,3" Margin="6,0,0,0" Click="McpListTools_Click"/>
+                                <Button DockPanel.Dock="Right" x:Name="McpInitButton" Content="初始化连接"
+                                        Padding="8,3" Margin="6,0,0,0" Click="McpInit_Click"/>
                                 <TextBlock x:Name="McpStatusText"
                                            Text="localhost:3001"
                                            Foreground="#16A765" FontWeight="SemiBold"
-                                           VerticalAlignment="Center" Margin="0,0,12,0"/>
-                                <Button x:Name="McpInitButton" Content="初始化连接"
-                                        Padding="8,3" Margin="0,0,6,0" Click="McpInit_Click"/>
-                                <Button x:Name="McpListToolsButton" Content="列出工具"
-                                        Padding="8,3" Click="McpListTools_Click"/>
-                            </StackPanel>
+                                           VerticalAlignment="Center" Margin="4,0,0,0"
+                                           TextTrimming="CharacterEllipsis"/>
+                            </DockPanel>
                         </Border>
 
                         <!-- 工具调用区 -->
@@ -180,19 +184,12 @@
                             </Grid>
                         </Border>
 
-                        <!-- 请求/响应日志 -->
-                        <RichTextBox x:Name="McpLogTextBox" Grid.Row="2"
-                                     FontFamily="Consolas" FontSize="12"
-                                     VerticalScrollBarVisibility="Auto"
-                                     IsReadOnly="True" Padding="10"
-                                     Background="#1E1E1E" Foreground="#D4D4D4"
-                                     BorderThickness="0">
-                            <RichTextBox.Resources>
-                                <Style TargetType="Paragraph">
-                                    <Setter Property="Margin" Value="0,2,0,2"/>
-                                </Style>
-                            </RichTextBox.Resources>
-                        </RichTextBox>
+                        <!-- 调用记录卡片区 -->
+                        <ScrollViewer x:Name="McpCardScrollViewer" Grid.Row="2"
+                                      VerticalScrollBarVisibility="Auto"
+                                      Background="#F0F2F5">
+                            <StackPanel x:Name="McpCardPanel" Margin="10"/>
+                        </ScrollViewer>
                     </Grid>
                 </TabItem>
 
